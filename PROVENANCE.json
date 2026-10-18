@@ -1,0 +1,30 @@
+{
+  "raven_comfy_backend": {
+    "url": "https://github.com/YanzuoLu/ComfyUI-MiniMax-H3-RAVEN-Streaming",
+    "commit": "bcfa38138ddf1a5041af9880760815874138d4e1",
+    "license": "MIT"
+  },
+  "mosaichunk_routing": {
+    "url": "https://github.com/mosaichunk/MosaiChunk",
+    "commit": "0eafcb919b2ee8c4510b4046c5e4d2c38dfdba21",
+    "files": [
+      "selector.py",
+      "sections.py",
+      "sp_exact.py",
+      "rope_reanchor.py"
+    ],
+    "license": "Upstream H3/RAVEN-related terms; see LICENSES/MosaiChunk-NOTICE.md"
+  },
+  "model_downloads": {
+    "router_revision": "03eb1531e2363cbee4fe27d773c4242a07eb1b32",
+    "adapter_revision": "90f30b11639e73ce0e3f2ab6ed70d1a133a66caf",
+    "base_revision": "e5eb578a89295337b8ff433a035929ce0279e0b6"
+  },
+  "changes": [
+    "Independent import namespace mosaichunk_h3",
+    "MosaiChunk host history and router node",
+    "Execution-local cache factory and per-chunk read hook",
+    "Separate preview event/route identity",
+    "Pinned explicit model downloader and conservative workflows"
+  ]
+}

@@ -1,0 +1,9 @@
+[project]
+name = "comfyui-minimax-h3-mosaichunk-local"
+version = "0.1.0"
+description = "Experimental local MosaiChunk T2VA router over the RAVEN ComfyUI streaming backend."
+requires-python = ">=3.10"
+dependencies = ["av>=16.0.0"]
+
+[tool.comfy]
+DisplayName = "MiniMax H3 MosaiChunk (experimental local port)"

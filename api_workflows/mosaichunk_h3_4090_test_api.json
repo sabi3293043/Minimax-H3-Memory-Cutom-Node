@@ -1,0 +1,129 @@
+{
+  "1": {
+    "class_type": "MosaiChunkH3ModelLoader",
+    "inputs": {
+      "unet_name": "minimax_h3_fl2va_bf16.safetensors",
+      "lora_name": "minimax_h3_raven_streaming_lora_4nfe_preview.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "MosaiChunk H3 RAVEN Model Loader"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "MiniMax-H3-video_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE (video)"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "MiniMax-H3-audio_vae_fp32.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE (audio)"
+    }
+  },
+  "5": {
+    "class_type": "MiniMaxH3ImageToVideo",
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ],
+      "prompt": "A small wooden box on a table contains a bright red star-shaped toy. A hand closes the lid, holds it closed briefly, then opens it again to reveal the same red star-shaped toy. Fixed camera, soft daylight, quiet room sounds.",
+      "width": 512,
+      "height": 320,
+      "length": 90
+    },
+    "_meta": {
+      "title": "MiniMax H3 Image to Video (T2VA: no frame inputs)"
+    }
+  },
+  "6": {
+    "class_type": "MosaiChunkH3StreamingSampler",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "5",
+        0
+      ],
+      "latent": [
+        "5",
+        1
+      ],
+      "video_vae": [
+        "3",
+        0
+      ],
+      "audio_vae": [
+        "4",
+        0
+      ],
+      "seed": 0,
+      "steps": 4,
+      "video_shift": 12,
+      "audio_shift": 3,
+      "kv_cache_storage": "cpu",
+      "router_name": "t2v/model.safetensors",
+      "far_memory_chunks": 1,
+      "history_ram_gib": 8.0,
+      "memory_mode": "mosaichunk"
+    },
+    "_meta": {
+      "title": "MosaiChunk H3 Streaming Sampler"
+    }
+  },
+  "7": {
+    "class_type": "SaveAnimatedWEBP",
+    "inputs": {
+      "images": [
+        "6",
+        1
+      ],
+      "filename_prefix": "mosaichunk_h3/test",
+      "fps": 24,
+      "lossless": false,
+      "quality": 90,
+      "method": "default"
+    },
+    "_meta": {
+      "title": "Save Animated WEBP"
+    }
+  },
+  "8": {
+    "class_type": "SaveAudio",
+    "inputs": {
+      "audio": [
+        "6",
+        2
+      ],
+      "filename_prefix": "mosaichunk_h3/audio"
+    },
+    "_meta": {
+      "title": "Save Audio (FLAC)"
+    }
+  }
+}

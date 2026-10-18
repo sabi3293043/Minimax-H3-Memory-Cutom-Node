@@ -1,0 +1,9 @@
+This distribution contains components under different licenses.
+
+New MosaiChunk integration code: Creative Commons Attribution-NonCommercial 4.0 International, see LICENSES/CC-BY-NC-4.0.txt.
+
+RAVEN ComfyUI backend and preview: MIT, copyright 2026 Yanzuo Lu. See LICENSES/RAVEN-MIT.txt and NOTICE.
+
+Vendored MosaiChunk routing: upstream H3/RAVEN-related terms apply; see LICENSES/MosaiChunk-NOTICE.md.
+
+Model weights are not included and retain their own licenses.

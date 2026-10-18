@@ -1,0 +1,95 @@
+"""Local ComfyUI nodes for the MosaiChunk T2V router and RAVEN sampler."""
+
+import json
+from pathlib import Path
+
+import folder_paths
+import comfy.utils
+import torch
+
+from .memory import MemorySettings, MosaiChunkKVCache
+from .nodes import RAVENModelLoader, RAVENStreamingSampler
+from .routing.selector import Selector
+
+ROUTER_FOLDER = "mosaichunk"
+folder_paths.folder_names_and_paths.setdefault(ROUTER_FOLDER, ([], {".safetensors"}))
+folder_paths.add_model_folder_path(ROUTER_FOLDER, str(Path(folder_paths.models_dir) / ROUTER_FOLDER))
+
+
+class MosaiChunkH3ModelLoader(RAVENModelLoader):
+    CATEGORY = "MiniMax H3/MosaiChunk"
+    DESCRIPTION = "Load the full non-pruned H3 model with the mandatory RAVEN streaming adapter."
+
+
+class MosaiChunkH3StreamingSampler(RAVENStreamingSampler):
+    CATEGORY = "MiniMax H3/MosaiChunk"
+    DESCRIPTION = (
+        "Experimental MosaiChunk T2VA port: two recent chunks plus one/two chunks of retrieved visual memory. "
+        "History stays in system RAM; GPU memory is assembled one layer at a time. "
+        "Use the full RAVEN H3 model, an empty AV latent and text-only conditioning. "
+        "Start at 512x320 / 90 frames / 4 steps / CPU history / 8 GiB history budget. "
+        "This port has not reproduced the paper's multi-GPU benchmark."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        schema = super().INPUT_TYPES()
+        required = schema["required"]
+        required.pop("sink")
+        required.pop("window")
+        required["kv_cache_storage"] = (["cpu", "cpu_pinned"], {"default": "cpu"})
+        required["router_name"] = (folder_paths.get_filename_list(ROUTER_FOLDER),)
+        required["far_memory_chunks"] = ("INT", {"default": 1, "min": 1, "max": 2})
+        required["history_ram_gib"] = ("FLOAT", {"default": 8.0, "min": 1.0, "max": 256.0,
+                                               "tooltip": "Maximum host memory for the history bank and router, separate from model weights."})
+        required["memory_mode"] = (["mosaichunk", "matched_window"], {"default": "mosaichunk",
+                                    "tooltip": "matched_window keeps the same active context budget without historical retrieval, for A/B testing."})
+        return schema
+
+    def sample(self, model, positive, latent, video_vae, audio_vae, seed,
+               router_name, far_memory_chunks=1, history_ram_gib=8.0, memory_mode="mosaichunk",
+               steps=4, video_shift=12.0, audio_shift=3.0, kv_cache_storage="cpu", unique_id=None):
+        if memory_mode not in ("mosaichunk", "matched_window"):
+            raise ValueError("memory_mode must be mosaichunk or matched_window.")
+        if int(far_memory_chunks) not in (1, 2):
+            raise ValueError("far_memory_chunks must be 1 or 2.")
+        if kv_cache_storage not in ("cpu", "cpu_pinned"):
+            raise ValueError("MosaiChunk history storage must be cpu or cpu_pinned.")
+        factory = None
+        if memory_mode == "mosaichunk":
+            path = Path(folder_paths.get_full_path_or_raise(ROUTER_FOLDER, router_name))
+            config = json.loads(path.with_name("config.json").read_text(encoding="utf-8"))
+            if config.get("task") != "text-to-video" or config.get("backbone") != "RAVEN-adapted MiniMax-H3 (H3-AR)":
+                raise ValueError("Select the MosaiChunk t2v router, not the LingBot i2v router.")
+            args = config["selector"]
+            with torch.device("meta"):
+                selector = Selector(d_in=args["d_in"], n_views=args["n_views"], d=args["d"], centre=args["centre"])
+            selector.load_state_dict(comfy.utils.load_torch_file(str(path), safe_load=True), strict=True, assign=True)
+            settings = MemorySettings(
+                far_budget=int(far_memory_chunks), history_ram_gib=float(history_ram_gib),
+                sections=config["sections"]["n_sections"],
+                descriptor_layers=tuple(config["sections"]["descriptor_layers"]),
+                redundancy=config["inference"]["mmr_lam"],
+            )
+            inv_freq = model.get_model_object("diffusion_model").rope.inv_freq.detach().float().cpu().clone()
+
+            def factory(num_layers, layout, config):
+                return MosaiChunkKVCache(num_layers, layout=layout, selector=selector, inv_freq=inv_freq,
+                                        settings=settings, storage=config.kv_cache_storage)
+
+        return super().sample(
+            model=model, positive=positive, latent=latent, video_vae=video_vae, audio_vae=audio_vae,
+            seed=seed, steps=steps, video_shift=video_shift, audio_shift=audio_shift,
+            sink=1, window=2 + int(far_memory_chunks),
+            kv_cache_storage=kv_cache_storage, unique_id=unique_id, cache_factory=factory,
+        )
+
+
+NODE_CLASS_MAPPINGS = {
+    "MosaiChunkH3ModelLoader": MosaiChunkH3ModelLoader,
+    "MosaiChunkH3StreamingSampler": MosaiChunkH3StreamingSampler,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "MosaiChunkH3ModelLoader": "MosaiChunk H3 RAVEN Model Loader",
+    "MosaiChunkH3StreamingSampler": "MosaiChunk H3 Streaming Sampler",
+}
