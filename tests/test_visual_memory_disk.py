@@ -54,5 +54,19 @@ class VisualMemoryDiskTests(unittest.TestCase):
             self.assertTrue((other / "keep").exists())
 
 
+    def test_delete_reclaims_disk_budget(self):
+        with tempfile.TemporaryDirectory() as root:
+            with VisualMemoryDisk(root, max_bytes=6) as bank:
+                one = bank.save(step=0, frame=1, data=b"1234")
+                with self.assertRaises(MemoryError):
+                    bank.save(step=0, frame=2, data=b"345")
+                bank.delete(one)
+                two = bank.save(step=1, frame=4, data=b"abcdef")
+                self.assertEqual(bank.used_bytes, 6)
+                self.assertEqual(bank.read(two), b"abcdef")
+                with self.assertRaises(ValueError):
+                    bank.delete(one)
+            self.assertEqual(list(Path(root).iterdir()), [])
+
 if __name__ == "__main__":
     unittest.main()

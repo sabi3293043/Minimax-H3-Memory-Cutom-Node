@@ -67,5 +67,38 @@ class NativeObserverTests(unittest.TestCase):
                     observer(failing_executor, None, None, None, None)
             self.assertEqual(list(Path(root).iterdir()), [])
 
+    def test_tiny_vae_auto_and_explicit_selection(self):
+        from mosaichunk_h3.native_visual_observer import choose_tiny_vae
+        names = ["other.safetensors", "folder/taeh3.safetensors", "taeh3_decoder.safetensors"]
+        self.assertEqual(choose_tiny_vae("auto", names), "folder/taeh3.safetensors")
+        self.assertEqual(choose_tiny_vae("other.safetensors", names), "other.safetensors")
+        with self.assertRaises(FileNotFoundError):
+            choose_tiny_vae("missing.safetensors", names)
+
+    def test_native_observation_multiple_steps_keeps_executor_untouched(self):
+        with tempfile.TemporaryDirectory() as root:
+            observer = NativeVisualObserver(tiny_vae_name="auto", max_frames=3,
+                                            max_memory_frames=2, min_progress=0,
+                                            disk_gib=0.1, temp_root=root)
+            callback_steps = []
+
+            def fake_callback(step, *_):
+                callback_steps.append(step)
+
+            def fake_executor(*args, **kwargs):
+                x0 = torch.zeros(1, 1, 24 * 3 * 2 * 2)
+                for step in range(6):
+                    args[5](step, x0, x0, 6)
+                return "native-result"
+
+            with patch("mosaichunk_h3.native_visual_observer._load_tae_decoder",
+                       return_value=FakeDecoder()):
+                result = observer(fake_executor, None, None, None, None, None,
+                                  fake_callback, False, None,
+                                  [[1, 24, 3, 2, 2], [1, 32, 2]])
+            self.assertEqual(result, "native-result")
+            self.assertEqual(callback_steps, list(range(6)))
+            self.assertEqual(list(Path(root).iterdir()), [])
+
 if __name__ == "__main__":
     unittest.main()

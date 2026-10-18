@@ -140,6 +140,17 @@ class VisualMemoryDisk:
                 raise ValueError("record belongs to another session")
             return (self.directory / record.filename).read_bytes()
 
+    def delete(self, record: VisualRecord):
+        """Evict one observation and reclaim its disk budget immediately."""
+        with self._mutex:
+            if self._closed:
+                raise RuntimeError("visual-memory session is closed")
+            if record not in self.records:
+                raise ValueError("record belongs to another session")
+            (self.directory / record.filename).unlink()
+            self.records.remove(record)
+            self.used_bytes -= record.size
+
     def close(self):
         with self._mutex:
             if self._closed:

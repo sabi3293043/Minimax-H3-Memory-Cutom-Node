@@ -73,6 +73,34 @@ GPU memory contains model working weights, activations, and one layer's assemble
 
 Current scope: text-to-video-and-audio plus experimental first/last-frame and reference memory, batch one, one GPU, one prompt per run, CPU or CPU-pinned history. The controller supports native pruned H3 models whose time basis can represent the RAVEN update. Persistent memory across runs, interactive prompt schedules, GGUF, PDD/VSA variants and paper-level reproducibility are not implemented. Image-conditioned modes reuse the released T2V router without retraining; correct data flow does not establish identity quality.
 
+## Native H3 visual observer (experimental)
+
+For **normal full-video MiniMax H3 sampling**, the separately registered
+**MosaiChunk H3 Native Visual Observer (experimental)** MODEL-to-MODEL node
+allows a visual-memory capture experiment without invoking RAVEN's
+chunk-by-chunk sampler. Place it in your native MODEL chain upstream of the
+normal H3 guider/sampler. Unlike `MosaiChunk H3 Conditioning`, it leaves the
+sampler and selected solver untouched.
+
+Its **tiny_vae_name** dropdown enumerates the files you have installed in
+`ComfyUI/models/vae_approx` (plus `auto`). Any compatible **24-channel
+MiniMax H3 Tiny VAE** can be selected; `auto` prefers the `taeh3` filenames.
+
+Recommended Tiny VAE: **[madebyollin TAEH3 (`taeh3.safetensors`)](https://github.com/madebyollin/taehv/blob/main/safetensors/taeh3.safetensors)**.
+Alternative: [Kijai MiniMax-H3-TAE](https://huggingface.co/Kijai/MiniMax-H3-TAE).
+
+The observer uses selected decoded frames and a bounded temporary disk
+cache that deletes its contents on completion/interruption/error. Selection
+currently uses simple RGB thumbnail novelty and successive denoising-step
+stability heuristics, *not* the trained MosaiChunk RAVEN router. It does
+**not** provide correction or validated improvement in video consistency.
+It decodes separately from KJ Model Preview Override and can slow sampling,
+particularly because temporal TAEH3 must process the full sequence to examine
+late video frames. This work remains experimental.
+
+See [NATIVE_MEMORY_STATUS.md](NATIVE_MEMORY_STATUS.md) for milestones and
+remaining native memory-injection work.
+
 ## Validation
 
 See [VALIDATION.md](VALIDATION.md) for the exact checks run and their limits. Synthetic tests and API compatibility checks do not establish full-model image quality or a successful generation on a 24 GB card.

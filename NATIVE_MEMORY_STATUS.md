@@ -36,12 +36,33 @@ and existing third-party model patches.
 - CPU fake-executor tests can verify routing and cleanup, not real H3 quality.
   Run `python -m unittest discover -s tests -p test_native_visual_observer.py -v`.
 
+
+## Third milestone: Tiny VAE selector and adaptive observation index
+
+- The Native Visual Observer's `tiny_vae_name` dropdown lists all files in
+  `models/vae_approx`, plus `auto`. Auto prefers `taeh3.safetensors` and
+  then `taeh3_decoder.safetensors`. All explicit selections are validated
+  to have 24 H3 latent channels when loaded.
+- Recommended model: https://github.com/madebyollin/taehv/blob/main/safetensors/taeh3.safetensors
+  (alternative decoder: https://huggingface.co/Kijai/MiniMax-H3-TAE).
+- `visual_memory_index.py` ranks full-video RGB frames by coarse visual
+  novelty, within-video transitions and cross-denoising-step stability. This is
+  a heuristic, NOT trained object tracking, learned MosaiChunk retrieval, or
+  an identity-consistency measurement.
+- A user-configurable `max_memory_frames` limits the number of stored images;
+  superseded records are actually deleted from disk and budget accounting
+  updated. Observation occurs only after `min_progress`. A decoder exception
+  never modifies sampler latents or suppresses the original callback.
+- Tests cover dropdown selection, retrieval, bounded eviction, file cleanup,
+  and native-executor continuity. Tests are synthetic; no GPU H3 generation
+  has been tested.
+
 ## Remaining milestones (not implemented here)
 
 1. Share TAEH3 decoder outputs with KJ preview without double decode; add safe full-video observation resource budgets.
-2. Adaptive acquisition and retrieval across space, video frames and denoising
-   steps. MosaiChunk's existing router was trained for RAVEN chunk KV and cannot
-   be used as an RGB or full-video-step selector without additional validation.
+2. Replace coarse RGB thumbnail heuristics with validated identity/object
+   tracking, occlusion-aware selection and trained feature retrieval. The
+   released MosaiChunk KV router is not a drop-in RGB selector.
 3. Trained or otherwise experimentally validated memory *injection* into native
    H3's next prediction. A preview callback alone is observation, not guidance.
 4. Optional disk-backed historical KV store for the legacy RAVEN path, distinct
