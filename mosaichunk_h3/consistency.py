@@ -10,8 +10,9 @@ model, with the KV cache and the cached forward supplied by
 
 The loop is **chunk-major**, not sigma-major: a chunk is carried to completion
 in ``steps`` NFEs, written into the cache as clean context, and only then does
-the next chunk start. Stock ComfyUI samplers cannot express this, which is why
-none of ``comfy.samplers`` is called (see ``docs/architecture.md`` §4).
+the next chunk start. Stock numerical solvers do not express this loop. The
+MODEL controller can host it through ComfyUI's OUTER_SAMPLE wrapper, keeping
+ordinary sampler nodes as the workflow entry point.
 
 The schedule
 ------------
@@ -452,6 +453,8 @@ class _Rollout:
         on_chunk: Optional[Callable[[ChunkOutput], Any]],
         cancel_check: Optional[Callable[..., Any]],
         cache_factory: Optional[Callable] = None,
+        initial_noise: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        on_step: Optional[Callable] = None,
     ) -> None:
         self.resolved = resolved
         self.conditioning = conditioning
@@ -473,6 +476,8 @@ class _Rollout:
         self.polled: List[str] = []
         self.noise_forwards = 0
         self.clean_forwards = 0
+        self.initial_noise = initial_noise
+        self.on_step = on_step
 
     # -- guarded callbacks ---------------------------------------------
 
@@ -545,6 +550,13 @@ class _Rollout:
             video_shape, dtype=self.dtype, label="video_initial_noise")
         audio_noise = self.rng.normal(
             audio_shape, dtype=self.dtype, label="audio_initial_noise")
+        # Keep the private draw order stable while honouring RandomNoise (or
+        # another caller-supplied ComfyUI noise source) in controller mode.
+        if self.initial_noise is not None:
+            video_noise, audio_noise = (t.to(device=self.device, dtype=self.dtype)
+                                        for t in self.initial_noise)
+            if tuple(video_noise.shape) != tuple(video_shape) or tuple(audio_noise.shape) != tuple(audio_shape):
+                raise SamplerError("Controller initial noise does not match the AV latent shapes")
         # Clean-context eps is drawn up front and carried: a chunk's cache-fill
         # rows are 0.999 * x0 + 0.001 * eps, and reproducing a run means
         # reproducing exactly those rows.
@@ -624,6 +636,9 @@ class _Rollout:
                 video_xt = (1.0 - video_next) * video_pred_x0 + video_next * video_eps
                 audio_xt = (1.0 - audio_next) * audio_pred_x0 + audio_next * audio_eps
                 self.cancel_point("after_step_update")
+                if self.on_step is not None:
+                    self._without_rng(self.on_step, chunk, step, video_pred_x0, audio_pred_x0,
+                                      video_xt, audio_xt, video_x0, audio_x0)
 
             # The last step's next sigma is 0, so x_t is exactly x0 here.
             self.cancel_point("before_chunk_delivery")
@@ -702,6 +717,8 @@ def sample_streaming(
     require_upstream_class: bool = True,
     warn_experimental: bool = True,
     cache_factory: Optional[Callable] = None,
+    initial_noise: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    on_step: Optional[Callable] = None,
 ) -> StreamingResult:
     """Run one chunk-major RAVEN rollout and return the finished AV latent.
 
@@ -755,5 +772,7 @@ def sample_streaming(
         on_chunk=on_chunk,
         cancel_check=cancel_check,
         cache_factory=cache_factory,
+        initial_noise=initial_noise,
+        on_step=on_step,
     )
     return rollout.run(load_models)

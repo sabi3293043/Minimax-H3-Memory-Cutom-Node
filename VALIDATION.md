@@ -50,3 +50,12 @@ Ten packaged unit tests pass, including an instrumented check that adapter casts
 The changes are confined to this custom-node package and bundled examples. ComfyUI core and launch settings are untouched.
 
 The offloading revision additionally passed 222 selected inherited CPU regressions covering sampling contracts, sampler integration, phase/memory planning and Comfy linear hooks (one warning). Native AIMDO GPU execution and revised generation timing remain unmeasured.
+
+
+## Existing sampler controller revision
+
+The MODEL-to-MODEL node now defers RAVEN preparation until sampling and installs an OUTER_SAMPLE wrapper. The original dense guard remains internal to prepared streaming models; ordinary sampler nodes now enter through the controller instead. First/last-frame and reference conditioning delegate to the original outer_sample without preparing a RAVEN copy.
+
+CPU integration exercised the real installed CFGGuider.sample wrapper path with a tiny real H3 model and real MosaiChunk router/cache: six chunks, three history retrievals, 24 full-shape callbacks, exact tensor equality to the standalone RAVEN recipe with the same supplied noise, and cancellation cleanup. A simulated previous-run audio carry scale of four round-trips through the callback and process_latent_out without changing denoised audio. The native model preparation function is substituted in this controller probe; separate preparation/quantized tests cover that component.
+
+The inherited CPU regression selection plus package tests passed 388 tests with one warning. The new status extension passed syntax and mocked event/widget checks; browser rendering remains untested. Standard-sampler workflow files are provided separately so existing user workflows are preserved. No trained GPU generation or speed/fan/peak-VRAM measurement was run for this revision; the user performs that test.

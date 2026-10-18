@@ -2,7 +2,7 @@
 
 **Experimental local ComfyUI port of MosaiChunk's T2V memory router. Full-size video generation and quality are not yet validated by this repository.**
 
-**Existing pruned/INT8 FL2VA checkpoint:** use the **MosaiChunk H3 Conditioning** node (MODEL input and output) with `offloading=inherit` and the compact converted conditioning described in [PRUNED.md](PRUNED.md). This path keeps your existing generator and does not require downloading the full BF16 checkpoint. Use its output with **MosaiChunk H3 Streaming Sampler**; normal KSampler/SamplerCustomAdvanced cannot run the memory retrieval. The full-model instructions below describe the separate original loader.
+**Existing pruned/INT8 FL2VA checkpoint:** use **MosaiChunk H3 Conditioning**, the MODEL-to-MODEL controller, between your UNET/LoRA chain and your normal sampler or BasicGuider. No new sampler node is required. T2V memory uses RAVEN's internal chunk consistency recipe: the existing sampler supplies seed, initial noise and step count; its selected algorithm and sigma values are replaced. Use four steps and CFG 1. First/last-frame, reference and unsupported checkpoints preserve normal generation and show **Memory inactive**. See [PRUNED.md](PRUNED.md). No full checkpoint download is required.
 
 MosaiChunk retrieves details from earlier chunks when an object or scene returns. Older attention keys/values stay in system RAM. Only selected history for one transformer layer is brought onto the GPU at a time. Memory lasts for one sampler execution; it is released afterward.
 
@@ -44,7 +44,9 @@ The original **MosaiChunk H3 RAVEN Model Loader** requires the full model. Prune
 
 ## Workflow
 
-Open `example_workflows/mosaichunk_h3_4090_test.json` in ComfyUI. API users can submit `api_workflows/mosaichunk_h3_4090_test_api.json` to `/prompt`.
+For the controller, open `example_workflows/mosaichunk_h3_controller_test.json` and retain your existing decoder chain. The node status reports active/inactive memory.
+
+The following is the legacy full-model workflow. Open `example_workflows/mosaichunk_h3_4090_test.json` in ComfyUI. API users can submit `api_workflows/mosaichunk_h3_4090_test_api.json` to `/prompt`.
 
 1. **MosaiChunk H3 RAVEN Model Loader:** select the full H3 checkpoint and RAVEN LoRA.
 2. Use the normal H3 text encoder and **MiniMax H3 Image to Video** in T2VA mode, with no first/last image connected.
@@ -67,7 +69,7 @@ At 512×320, stored KV is roughly 1.15 GiB per full media chunk. The provided 90
 
 GPU memory contains model working weights, activations, and one layer's assembled attention memory. It does **not** hold all 50 layers' historical KV simultaneously. Moving data over PCIe and CPU routing adds latency. Other GPU workloads should be paused before testing.
 
-Current scope: text-to-video-and-audio, batch one, one GPU, one prompt per run, CPU or CPU-pinned history. Pruned/INT8 FL2VA has a MODEL-to-MODEL conditioning node. Image/reference conditioning, persistent memory across runs, interactive prompt schedules, GGUF, and paper-level reproducibility are not implemented.
+Current scope: text-to-video-and-audio, batch one, one GPU, one prompt per run, CPU or CPU-pinned history. Pruned/INT8 FL2VA has a MODEL-to-MODEL conditioning node. Image/reference memory (normal generation passes through), persistent memory across runs, interactive prompt schedules, GGUF, and paper-level reproducibility are not implemented.
 
 ## Validation
 
