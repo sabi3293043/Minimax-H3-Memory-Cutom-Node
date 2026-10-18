@@ -129,7 +129,8 @@
       "memory_mode": "mosaichunk",
       "offloading": "inherit",
       "generation_mode": "auto",
-      "router_name": "t2v/model.safetensors"
+      "router_name": "t2v/model.safetensors",
+      "conditioning_base_unet": "auto"
     }
   },
   "10": {

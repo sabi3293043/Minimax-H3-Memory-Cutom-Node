@@ -472,6 +472,14 @@ class T2VALayout:
     # -- derived shapes
 
     @property
+    def prefix_rows(self) -> int:
+        return self.text_len
+
+    @property
+    def target_origin(self) -> float:
+        return float(self.text_len)
+
+    @property
     def frame_rows(self) -> int:
         return (self.latent_h // PATCH_SIZE[1]) * (self.latent_w // PATCH_SIZE[2])
 

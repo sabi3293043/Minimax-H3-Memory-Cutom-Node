@@ -237,7 +237,8 @@
         "mosaichunk",
         "inherit",
         "auto",
-        "t2v/model.safetensors"
+        "t2v/model.safetensors",
+        "auto"
       ]
     },
     {
@@ -461,7 +462,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "T2V memory uses internal RAVEN consistency: seed/noise/step count come from KSampler; selected solver and sigma grid are replaced. Four steps, CFG 1. Image/reference generation passes through with memory inactive. Keep offloading=inherit. Experimental: user generation test required."
+        "Memory supports T2V plus experimental keyframe/reference context. Connect images through native H3 conditioning nodes. Four steps, CFG 1; bypass Spectrum/attention replacements. Sampler solver/sigma values are replaced by RAVEN consistency. Keep offloading=inherit and conditioning_base_unet=auto (original local FL2VA pruned model; only small modulation layers are read). Off mode runs normal H3. GPU quality/performance need your test."
       ]
     }
   ],

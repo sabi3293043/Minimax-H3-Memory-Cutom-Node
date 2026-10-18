@@ -65,7 +65,7 @@ class MosaiChunkKVCache(ChunkKVCache):
     def _check_budget(self, key):
         width = int(key.shape[1]) * int(key.shape[2])
         expected = self.num_layers * 2 * width * key.element_size() * (
-            self.layout.text_len + sum(c.rows for c in self.layout.chunks[:-1])
+            self.layout.prefix_rows + sum(c.rows for c in self.layout.chunks[:-1])
         )
         # Pooled FP32 views and the router are additional to the verbatim bank.
         expected += len(self.layout.chunks) * self.settings.sections * 9 * width * 4
@@ -157,7 +157,7 @@ class MosaiChunkKVCache(ChunkKVCache):
             ch = self.layout.chunk(c)
             frame = (rows - ch.audio_rows) // self.layout.frame_rows
             dest_pos[:, 0] = torch.tensor([
-                video_position_start(destinations[c] + int(f), float(self.layout.text_len)) for f in frame
+                video_position_start(destinations[c] + int(f), self.layout.target_origin) for f in frame
             ], dtype=dest_pos.dtype)
             self._far_parts.append((c + 1, rows, float(gates[j]),
                                     rope_freqs(source_pos, self.inv_freq), rope_freqs(dest_pos, self.inv_freq)))

@@ -455,6 +455,7 @@ class _Rollout:
         cache_factory: Optional[Callable] = None,
         initial_noise: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         on_step: Optional[Callable] = None,
+        image_context: Any = None,
     ) -> None:
         self.resolved = resolved
         self.conditioning = conditioning
@@ -478,6 +479,7 @@ class _Rollout:
         self.clean_forwards = 0
         self.initial_noise = initial_noise
         self.on_step = on_step
+        self.image_context = image_context
 
     # -- guarded callbacks ---------------------------------------------
 
@@ -566,27 +568,28 @@ class _Rollout:
             audio_shape, dtype=self.dtype, label="audio_clean_eps")
 
         self.cancel_point("before_prefill")
-        # Text is cache chunk 0 and is written alone, once per rollout. The
+        # Permanent context is cache chunk 0, written once per rollout. It
+        # contains text alone or a joint text/image/audio condition prefix. The
         # context is cast to the compute dtype here, the way upstream's
         # ``MiniMaxH3.extra_conds`` casts before running the refiner: the CLIP
         # hands back whatever dtype it encoded in, and cached text K/V in a
         # different dtype than the chunks' would be refused by the attention
         # module (one cache, one compute dtype, one device).
-        model.prefill_text(
-            self.conditioning.cross_attn.to(device=self.device, dtype=self.compute_dtype),
-            cache=self.cache,
-            transformer_options=options,
-            text_token_tags=(
-                None if self.conditioning.token_tags is None
-                else self.conditioning.token_tags.to(self.device)
-            ),
-            compute_dtype=self.compute_dtype,
-        )
+        if self.image_context is not None and self.image_context.active:
+            from .image_context import prefill_conditioned
+            prefill_conditioned(model, self.image_context, self.conditioning, layout,
+                                self.cache, options, self.compute_dtype, self.device, config.seed)
+        else:
+            model.prefill_text(
+                self.conditioning.cross_attn.to(device=self.device, dtype=self.compute_dtype),
+                cache=self.cache, transformer_options=options,
+                text_token_tags=(None if self.conditioning.token_tags is None
+                                 else self.conditioning.token_tags.to(self.device)),
+                compute_dtype=self.compute_dtype,
+            )
         self.cancel_point("after_prefill")
-
         video_x0 = torch.zeros_like(video_noise)
         audio_x0 = torch.zeros_like(audio_noise)
-
         video_steps = config.video_steps()
         audio_steps = config.audio_steps()
 
@@ -719,6 +722,7 @@ def sample_streaming(
     cache_factory: Optional[Callable] = None,
     initial_noise: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
     on_step: Optional[Callable] = None,
+    image_context: Any = None,
 ) -> StreamingResult:
     """Run one chunk-major RAVEN rollout and return the finished AV latent.
 
@@ -743,6 +747,10 @@ def sample_streaming(
     conditioning = contracts.parse_conditioning(positive)
     request = contracts.parse_latent(latent, warn_experimental=warn_experimental)
     layout = request.layout(conditioning.text_len, warn_experimental=False)
+    if image_context is not None and image_context.active:
+        from .image_context import ConditionedLayout
+        image_context.validate_schedule(config)
+        layout = ConditionedLayout(layout, image_context)
 
     if device is None:
         device = resolved.load_device if resolved.load_device is not None else request.device
@@ -774,5 +782,6 @@ def sample_streaming(
         cache_factory=cache_factory,
         initial_noise=initial_noise,
         on_step=on_step,
+        image_context=image_context,
     )
     return rollout.run(load_models)

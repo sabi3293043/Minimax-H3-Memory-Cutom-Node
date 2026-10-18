@@ -1,8 +1,8 @@
-# Pruned and quantized FL2VA models
+# Pruned and quantized H3 models
 
-The **MosaiChunk H3 Conditioning** node (MODEL input and MODEL output) adds an experimental path for existing curve-form FL2VA H3 checkpoints. The separate original loader still accepts full BF16 models. GGUF is not implemented by this loader.
+The **MosaiChunk H3 Conditioning** node (MODEL input and MODEL output) adds experimental memory support for existing curve-form FL2VA and REF2VA H3 checkpoints. The separate original loader still accepts full BF16 models. GGUF is not implemented by this loader.
 
-The conditioning node keeps the checkpoint's quantized attention and MLP weights, attaches all 213 non-conditioning RAVEN targets, and replaces the timestep table and 51 modulation projections with converted RAVEN conditioning. Both timestep-encoder adapters and all 51 modulation adapters are included in that conversion. No adapter families are silently discarded. The MLP calls its down-projection directly to ensure the activation-side RAVEN hook runs with quantized weights.
+The conditioning node keeps the checkpoint's quantized attention and MLP weights, attaches all 213 non-conditioning RAVEN targets, and transfers the converted time/modulation update onto its 51 modulation projections while retaining the incoming time-table coordinates. Both timestep-encoder adapters and all 51 modulation adapters are included in that conversion. No adapter families are silently discarded. The MLP calls its down-projection directly to ensure the activation-side RAVEN hook runs with quantized weights.
 
 Use the stock `minimax_h3_fl2va_pruned_int8_convrot.safetensors` first. W4A8 shares its time table but needs a separate runtime check. Ref2VA and FastVideo/VSA checkpoints are different trained generators and are not substitutes for the RAVEN FL2VA base. A matching time table verifies coordinates, not that a third-party finetune is the original base. Applying the converted conditioning replaces that finetune's modulation layers.
 
@@ -26,41 +26,43 @@ The conditioning file is **174,613,456 bytes**. It contains model-derived weight
 
 ## ComfyUI workflow
 
-The same **MosaiChunk H3 Conditioning** node now contains the sampler controller. Recreate this node after restarting ComfyUI if its new controls do not appear.
+The same **MosaiChunk H3 Conditioning** node contains the sampler controller for text-to-video, first/last-frame and reference generation. Restart ComfyUI and refresh/recreate this node to show the new controls.
 
-1. Connect **UNET Loader → your own LoRA chain → MosaiChunk H3 Conditioning**.
-2. Connect its MODEL output to your existing **KSampler**, or to **BasicGuider / CFGGuider → SamplerCustomAdvanced**. CFG must be 1 for active memory.
-3. Keep the normal H3 conditioning and empty AV latent connected to the existing sampler; keep your existing video/audio VAE decode and save chain.
-4. Start with 512 x 320, 90 frames, four sampler steps, `generation_mode=auto`, `offloading=inherit`, CPU history and an 8 GiB history budget.
+1. Connect **UNET Loader → your own LoRA chain → MosaiChunk H3 Conditioning → your existing sampler / BasicGuider**. Keep your existing decoder/save chain.
+2. Connect normal **MiniMax H3 Image to Video** conditioning for text-to-video or first/last-frame generation. Connect its first and/or last images as usual. For references, use **MiniMax H3 Reference to Video** with its VAE and reference inputs connected so it supplies encoded reference latents.
+3. Leave `generation_mode=auto`, `offloading=inherit`, and `conditioning_base_unet=auto`. Auto finds the original local `minimax_h3_fl2va_pruned_int8_convrot.safetensors`. If it has a different name, explicitly select the original pruned FL2VA baseline used by your conditioning conversion. The selected baseline's small time table and 51 modulation projections are read; its backbone is never loaded as another generator.
+4. Start at 512 x 320, 90 frames, **four sampler steps and CFG 1**, CPU history and an 8 GiB history budget. Bypass Spectrum and attention replacement patches for active memory. Keep the converted conditioning file and mandatory RAVEN adapter selected; do not apply RAVEN again through an ordinary LoRA loader.
 
-Example: `example_workflows/mosaichunk_h3_controller_test.json`, with an API equivalent in `api_workflows/`. This package update does not overwrite your saved workflows. Old dedicated sampler workflows remain available for compatibility.
+The status should say **Memory active: text_to_video / first_last_frame / reference** once the prepared model loads. Later retrieval messages in the log report selected historical sections. `generation_mode=off` restores normal generation for comparison. Old reference/keyframe modes no longer silently bypass memory. Missing or incompatible image conditioning raises an error.
+
+`example_workflows/mosaichunk_h3_controller_test.json` uses a native sampler with normal video/audio decoders. The matching API example is in `api_workflows/`. Image-mode API templates are also provided; replace their example image filenames with your uploaded images. These are schema examples, not trained quality presets. Existing saved user workflows are not overwritten.
 
 ## Mode routing
 
-| Controller mode | Behavior |
+| Mode | Memory behavior |
 |---|---|
-| auto | Detect image/reference conditioning and checkpoint time table at sampling time |
-| text_to_video | Request T2V memory; image/reference inputs still take priority and pass through |
-| first_last_frame | Preserve normal generation; memory inactive |
-| reference | Preserve normal generation; memory inactive |
-| off | Preserve normal generation; memory inactive |
+| auto | Detect actual positive image/reference inputs; otherwise use text-to-video |
+| text_to_video | Use text memory; supplied image/reference inputs still take priority |
+| first_last_frame | Require encoded keyframes and retain them in the permanent prefix |
+| reference | Require encoded references and retain them in the permanent prefix |
+| off | Delegate unchanged to the original sampler and model; memory inactive |
 
-Only the supported FL2VA time table with text-only conditioning activates RAVEN/MosaiChunk. Other time tables, including REF2VA, pass through with an unsupported-checkpoint notice. A matching time table alone cannot establish compatibility with every third-party finetune. First/last-frame and reference memory are **not implemented**. The status widget and ComfyUI log state whether memory is active. Explicit modes label routing; your existing conditioning nodes still provide frames/references.
+Native keyframe/guide positions, mixed text modality tags, reference-image grids, reference-video clocks and stereo reference audio are retained. Image/reference rows join text in permanent cache record zero; they are never evicted or treated as generated-history candidates. Each completed media chunk enters the normal history bank. The router retrieves generated visual sections beyond the two recent chunks. Reference target clocks and retrieved-key re-anchoring use H3's native packed layout.
 
-## Sampling controls
+## Preserve the input model
 
-Active memory runs the trained **RAVEN consistency update**, chunk by chunk, inside the controller. The existing sampler's seed, supplied initial noise and **number of schedule intervals** are used. Its selected numerical solver, solver-specific settings, and individual sigma values are replaced by shifted RAVEN grids controlled by `video_shift` and `audio_shift`. Four steps is the released preview recipe. This is not a claim that ordinary Euler/res_multistep integration reproduces RAVEN. Partial denoise, nonempty input latents, noise masks, custom guiders, CFG other than 1, conditioning schedules and incompatible model wrappers are rejected before model preparation.
+The converted file describes RAVEN-adapted FL2VA modulation. Applying those absolute projections to a REF2VA finetune would erase its own modulation. The controller instead subtracts the original FL2VA baseline and transfers **only the RAVEN update** onto the incoming model's projections. The incoming time table and LoRA coordinates remain unchanged. A least-squares mapping handles compatible alternative pruned bases; a projection with more than 1% relative update-fit error is rejected. On the original FL2VA baseline this reproduces the converted file itself.
 
-In inactive modes the original sampler, schedule, guider, LoRAs, conditioning and model run normally, with no RAVEN adapter or converted conditioning applied. Artifact files are not opened for those modes.
+The baseline must be the original FL2VA checkpoint, not an arbitrary finetune with a similar name. REF2VA and image-conditioned use of the released T2V router/adapter is **experimental**, without new training or quality validation. Quantization, model finetunes and stacked style/character LoRAs can change output quality. CPU execution tests show conditioning is consumed and history retrieval runs; they do not prove identity preservation or endpoint accuracy in trained videos.
 
-The node also exposes router selection, RAVEN adapter/converted conditioning selection, CPU or page-locked CPU KV storage, one/two retrieved chunks, history RAM limit, MosaiChunk/matched-window retrieval and offloading policy. The RAVEN adapter strength is fixed at 1 because its timestep/modulation updates are baked into the converted file. Style/character LoRAs remain on the incoming MODEL chain; quality when stacking them with RAVEN is experimental.
+## Sampling and memory controls
 
-## Offloading and scope
+Active memory uses RAVEN's chunk-by-chunk consistency update. The existing sampler's seed, supplied initial noise and number of schedule intervals are used. The selected solver, solver-specific settings and individual sigma values are replaced by node-controlled video/audio shifted RAVEN grids. Four steps is the released preview recipe. Partial denoise, nonempty input latents, noise masks, custom guiders, CFG other than 1, conditioning schedules and incompatible wrappers are rejected. Image modes also reject augmentation/schedule combinations that would change a reference row's timestep while its KV is cached.
 
-`offloading=inherit` retains native ComfyUI dynamic/static policy for the prepared memory model. `static` is an explicit fallback for active memory only. The controller reserves chunk working memory through native `load_models_gpu` and releases its history on completion, failure or cancellation. It does not decode between chunks; your existing decoder runs after sampling. An independent local model copy isolates the incoming branch and can increase host RAM while both copies remain cached.
+Controls include router and adapter/conditioning selection, local conditioning baseline selection, CPU or CPU-pinned history, one/two retrieved chunk-equivalents, history RAM limit, MosaiChunk/matched-window comparison and native offloading policy. The RAVEN strength stays fixed at 1 because the converted time/modulation updates are tied to that strength. Extra references increase permanent-context RAM and attention workspace; the history limit includes their KV records and is not a total process RAM/VRAM limit.
 
-All changes are in this custom-node package. ComfyUI core, launcher, OS shared-memory settings, global VRAM policy and fan controls are not changed. CPU history, adapter computation, routing and clean-context fills still add overhead. Speed, GPU fan behavior and trained output quality require real generation testing; no improvement is promised from CPU checks.
+`offloading=inherit` retains native ComfyUI dynamic/static policy. `static` is an explicit fallback. A fresh local copy isolates your original MODEL and can increase host RAM while both remain cached. History is released on success, failure or cancellation. Existing VAE decoders run after sampling. Node installation changes no ComfyUI core, model, launcher or saved workflow files. No speed, fan-noise, peak-VRAM or trained-quality claim follows from CPU checks.
 
-The history limit covers stored KV, not all process RAM or VRAM. Default downloads fetch only router and adapter; full BF16 requires explicit `--components base` and is unnecessary here. No new download is required if you already have the adapter, router and converted conditioning.
+No new model download is needed when you already have the original FL2VA pruned baseline, your target generator, converted conditioning, RAVEN adapter and T2V router. Default downloads fetch router/adapter only; the full BF16 checkpoint is unnecessary.
 
 References inspected during development: [H3 pruning and affine LoRA projection](https://huggingface.co/multimodalart/MiniMax-H3-Pruned), [conditioning rebase measurements](https://github.com/matsuo-koya/minimax-h3-notes), and [H3 pruned AdaLN builder](https://github.com/xiaolibai-sys/MiniMax-H3-Pruned-Lora-Adapter). This implementation folds the RAVEN-adapted time curve as well as the modulation adapters.

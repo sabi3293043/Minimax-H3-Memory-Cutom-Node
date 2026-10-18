@@ -13,12 +13,17 @@ def prepare_model(model, conditioning_path, adapter_path, controls, *, clone=Tru
 
     root = model.get_model_object("diffusion_model")
     if not isinstance(root, MiniMaxH3Model) or not root.use_adaln_curves:
-        raise ValueError("MosaiChunk conditioning requires a native ComfyUI pruned FL2VA H3 MODEL")
+        raise ValueError("MosaiChunk conditioning requires a native ComfyUI pruned H3 MODEL")
     if isinstance(root, RavenCausalMiniMaxH3Model):
         raise ValueError("This MODEL already has RAVEN conditioning; apply this node once")
     if any(block.attn.to_gate_compress is not None for block in root.blocks):
         raise ValueError("FastVideo/VSA finetunes are not the FL2VA base required by RAVEN")
-    converted = read_conditioning(conditioning_path, root.adaln_t_table, adapter_path)
+    transfer = controls.get('conditioning_transfer', False)
+    if transfer:
+        from .conditioning_transfer import read_transfer_source, transfer_conditioning
+        converted, source_table = read_transfer_source(conditioning_path, adapter_path, controls.get('conditioning_base_path'))
+    else:
+        converted = read_conditioning(conditioning_path, root.adaln_t_table, adapter_path)
     factory = model.cached_patcher_init
     if factory is None:
         raise ValueError("Use ComfyUI's UNET Loader: this MODEL has no reload factory for an independent conditioned copy")
@@ -27,6 +32,9 @@ def prepare_model(model, conditioning_path, adapter_path, controls, *, clone=Tru
     static = disable_dynamic or controls.get("offloading", "inherit") == "static"
     prepared = model.clone(disable_dynamic=static, force_deepcopy=True) if clone else model
     root = prepared.model.diffusion_model
+    if transfer:
+        converted, fit_error = transfer_conditioning(converted, source_table, controls['conditioning_base_path'], root)
+        prepared.model_options['mosaichunk_conditioning_fit_error'] = fit_error
     root.__class__ = MosaiChunkStreamingMiniMaxH3Model
     root.adaln_t_table = converted["adaln_t_table"]
     for index, block in enumerate(root.blocks):

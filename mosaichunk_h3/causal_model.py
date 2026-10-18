@@ -1592,9 +1592,9 @@ class RavenCausalMiniMaxH3Model(MiniMaxH3Model):
 class MosaiChunkStreamingMiniMaxH3Model(RavenCausalMiniMaxH3Model):
     def forward(self, *args, **kwargs):
         raise CausalModelError(
-            "MosaiChunk H3 Conditioning requires MosaiChunk H3 Streaming Sampler. "
-            "KSampler/SamplerCustomAdvanced do not run historical KV retrieval. "
-            "Use the streaming sampler, or bypass the conditioning node for ordinary sampling."
+            "A prepared MosaiChunk model requires the chunk controller. Keep MosaiChunk H3 "
+            "Conditioning on the MODEL chain into your ordinary sampler, or use the legacy "
+            "MosaiChunk H3 Streaming Sampler. Do not call the prepared dense forward directly."
         )
 
 
@@ -1634,7 +1634,8 @@ def _text_mod_segments(text_len: int, text_token_tags: Optional[torch.Tensor]):
 
 
 def _resolve_chunk(layout: layout_mod.T2VALayout, chunk_index: int) -> layout_mod.Chunk:
-    if not isinstance(layout, layout_mod.T2VALayout):
+    from .image_context import ConditionedLayout
+    if not isinstance(layout, (layout_mod.T2VALayout, ConditionedLayout)):
         raise CausalModelError(
             f"layout must be a T2VALayout, got {type(layout).__name__}"
         )

@@ -1,0 +1,177 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "MiniMaxVideoGen/All_in_one_model_T2V_I2V_R2V/Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "MiniMax-H3-video_vae_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE (video)"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "MiniMax-H3-audio_vae_fp32.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE (audio)"
+    }
+  },
+  "5": {
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "prompt": "A red box matching <Picture 1> sits on a table. The camera turns away briefly, then returns to the same box. Consistent lighting and natural room sounds.",
+      "width": 512,
+      "height": 320,
+      "length": 90,
+      "vae": [
+        "3",
+        0
+      ],
+      "audio_vae": [
+        "4",
+        0
+      ],
+      "ref_images.ref_image_0": [
+        "12",
+        0
+      ],
+      "ref_image_size": "match"
+    },
+    "_meta": {
+      "title": "MiniMax H3 Image to Video (T2VA: no frame inputs)"
+    }
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "9",
+        0
+      ],
+      "seed": 0,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "positive": [
+        "5",
+        0
+      ],
+      "negative": [
+        "5",
+        0
+      ],
+      "latent_image": [
+        "5",
+        1
+      ],
+      "denoise": 1.0
+    }
+  },
+  "7": {
+    "class_type": "SaveAnimatedWEBP",
+    "inputs": {
+      "images": [
+        "10",
+        0
+      ],
+      "filename_prefix": "mosaichunk_h3/test",
+      "fps": 24,
+      "lossless": false,
+      "quality": 90,
+      "method": "default"
+    },
+    "_meta": {
+      "title": "Save Animated WEBP"
+    }
+  },
+  "8": {
+    "class_type": "SaveAudio",
+    "inputs": {
+      "audio": [
+        "11",
+        0
+      ],
+      "filename_prefix": "mosaichunk_h3/audio"
+    },
+    "_meta": {
+      "title": "Save Audio (FLAC)"
+    }
+  },
+  "9": {
+    "class_type": "MosaiChunkH3Conditioning",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "conditioning_name": "raven-fl2va-conditioning.safetensors",
+      "raven_lora": "minimax_h3_raven_streaming_lora_4nfe_preview.safetensors",
+      "video_shift": 12.0,
+      "audio_shift": 3.0,
+      "kv_cache_storage": "cpu",
+      "far_memory_chunks": 1,
+      "history_ram_gib": 8.0,
+      "memory_mode": "mosaichunk",
+      "offloading": "inherit",
+      "generation_mode": "reference",
+      "router_name": "t2v/model.safetensors",
+      "conditioning_base_unet": "auto"
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "6",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "11": {
+    "class_type": "VAEDecodeAudio",
+    "inputs": {
+      "samples": [
+        "6",
+        0
+      ],
+      "vae": [
+        "4",
+        0
+      ]
+    }
+  },
+  "12": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "reference.png"
+    }
+  }
+}

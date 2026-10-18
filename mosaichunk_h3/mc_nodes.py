@@ -25,11 +25,12 @@ class MosaiChunkH3ModelLoader(RAVENModelLoader):
 class MosaiChunkH3Conditioning:
     CATEGORY = "MiniMax H3/MosaiChunk"
     DESCRIPTION = (
-        "MODEL-to-MODEL controller for ordinary H3 samplers. T2V uses the RAVEN "
+        "MODEL-to-MODEL controller for ordinary H3 samplers. Active memory uses the RAVEN "
         "chunk consistency recipe with sampler seed, initial noise and step count; "
         "the selected solver and sigma values are replaced. Use four steps/CFG 1. "
-        "First/last-frame and reference modes preserve normal generation with a "
-        "memory inactive notice. Offloading inherits the incoming native policy."
+        "First/last-frame and reference modes retain their image/audio context in "
+        "the permanent memory prefix. Image modes and REF2VA adapter transfer are "
+        "experimental. Offloading inherits the incoming native policy."
     )
     RETURN_TYPES = ("MODEL",)
     RETURN_NAMES = ("model",)
@@ -55,18 +56,20 @@ class MosaiChunkH3Conditioning:
         }, "optional": {
             "generation_mode": (list(MODES), {"default": "auto"}),
             "router_name": (router_names(), {"default": "t2v/model.safetensors"}),
+            "conditioning_base_unet": (["auto"] + folder_paths.get_filename_list("diffusion_models"),
+                {"default": "auto", "tooltip": "Original FL2VA pruned checkpoint used ONLY to transfer the RAVEN modulation update onto the input model. Auto uses your existing standard FL2VA INT8 file. No download."}),
         }, "hidden": {"unique_id": "UNIQUE_ID"}}
 
     def apply(self, model, conditioning_name, raven_lora, video_shift=12., audio_shift=3.,
               kv_cache_storage="cpu", far_memory_chunks=1, history_ram_gib=8., memory_mode="mosaichunk", offloading="inherit",
-              generation_mode="auto", router_name="t2v/model.safetensors", unique_id=None):
+              generation_mode="auto", router_name="t2v/model.safetensors", conditioning_base_unet="auto", unique_id=None):
         conditioning_path = folder_paths.get_full_path(ROUTER_FOLDER, conditioning_name)
         adapter_path = folder_paths.get_full_path("loras", raven_lora)
         controls = dict(video_shift=float(video_shift), audio_shift=float(audio_shift),
                         kv_cache_storage=kv_cache_storage, far_memory_chunks=int(far_memory_chunks),
                         history_ram_gib=float(history_ram_gib), memory_mode=memory_mode, offloading=offloading,
-                        generation_mode=generation_mode)
-        # Resolve/load artifacts only if the runtime actually selects T2V memory.
+                        generation_mode=generation_mode, conditioning_base_unet=conditioning_base_unet)
+        # Resolve/load artifacts only if the runtime actually selects active memory.
         def cache_builder(prepared):
             return build_cache_factory(prepared, router_name, controls)
         return (attach_controller(model, conditioning_path, adapter_path, controls, cache_builder, unique_id),)

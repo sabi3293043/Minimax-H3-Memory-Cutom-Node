@@ -1,8 +1,8 @@
 """Execution-local RAVEN controller hosted by ordinary ComfyUI samplers.
 
-The outgoing MODEL stays native until sampling. Unsupported image/reference
-modes therefore use the original model, LoRAs, guider, sampler and offloader.
-Only text-only FL2VA runs prepare an independent RAVEN model.
+The outgoing MODEL stays native until sampling. Active modes prepare an
+independent RAVEN model and retain native image/audio conditioning as a
+permanent prefix. Off mode delegates to the original sampling path.
 """
 
 import logging
@@ -13,6 +13,7 @@ from .conditioning import prepare_model
 from .consistency import SamplerConfig, sample_streaming
 from .contracts import parse_conditioning, parse_latent, resolve_transformer_options
 from .pruned import tensor_sha256
+from .image_context import split_conditioning, ConditionedLayout
 
 LOG = logging.getLogger(__name__)
 KEY = "mosaichunk_h3_controller"
@@ -24,20 +25,42 @@ def select_mode(controls, conds, root):
     mode = controls.get("generation_mode", "auto")
     if mode not in MODES:
         raise ValueError(f"Unknown H3 controller mode: {mode}")
-    if mode in ("off", "first_last_frame", "reference"):
+    if mode == "off":
         return mode
-    # Check every conditioning branch. Explicit text_to_video must not discard
+    # Inspect the positive branch used at CFG 1. Explicit text_to_video must not discard
     # image/reference rows either. Tensors must never be coerced to bool here.
-    for entries in conds.values():
+    for entries in (conds.get('positive', ()),):
         for entry in entries or ():
-            if entry.get("minimax_refs") is not None:
+            refs = entry.get("minimax_refs")
+            frames = entry.get("minimax_keyframes")
+            if refs is not None and (not isinstance(refs, (tuple, list)) or len(refs)):
                 return "reference"
-            if entry.get("minimax_keyframes") is not None:
+            if frames is not None and (not isinstance(frames, (tuple, list)) or len(frames)):
                 return "first_last_frame"
+    if mode in ('first_last_frame', 'reference'):
+        raise ValueError(f"{mode} requires encoded image/keyframe/reference conditioning on the positive input")
     table = getattr(root, "adaln_t_table", None)
-    if table is None or tensor_sha256(table) != FL2VA_TABLE:
+    if table is None:
         return "unsupported_checkpoint"
     return "text_to_video"
+
+
+def conditioning_baseline(name='auto'):
+    import folder_paths
+    from .conditioning_transfer import read_baseline_table
+    if name != 'auto':
+        return folder_paths.get_full_path_or_raise('diffusion_models', name)
+    # This known original checkpoint is a delta baseline, never the output
+    # generator. Do not guess that an arbitrary similarly-named finetune is it.
+    candidates = ('minimax_h3_fl2va_pruned_int8_convrot.safetensors',
+                  'minimax_h3_fl2va_pruned_w4a8.safetensors')
+    for basename in candidates:
+        for filename in folder_paths.get_filename_list('diffusion_models'):
+            if filename.replace('\\', '/').rsplit('/', 1)[-1].lower() == basename:
+                path = folder_paths.get_full_path_or_raise('diffusion_models', filename)
+                if tensor_sha256(read_baseline_table(path)) == FL2VA_TABLE:
+                    return path
+    raise ValueError('Select your original FL2VA pruned checkpoint in conditioning_base_unet; no automatic model download is performed')
 
 
 def notify(node_id, message):
@@ -83,7 +106,7 @@ class MemoryController:
         guider = executor.class_obj
         mode = select_mode(self.controls, guider.original_conds,
                            guider.model_patcher.get_model_object("diffusion_model"))
-        if mode != "text_to_video":
+        if mode in ('off', 'unsupported_checkpoint'):
             notify(self.node_id, f"Memory inactive ({mode}); using normal H3 generation and sampler.")
             return executor(noise, latent_image, sampler, sigmas, denoise_mask,
                             callback, disable_pbar, seed, latent_shapes=latent_shapes)
@@ -95,7 +118,7 @@ class MemoryController:
         if abs(float(sigmas[0]) - 1.) > 1e-5 or float(sigmas[-1]) != 0.:
             raise ValueError("MosaiChunk memory requires full denoise (sigma 1 to 0); partial denoise is unsupported")
         if denoise_mask is not None:
-            raise ValueError("MosaiChunk T2V memory does not support a latent noise mask")
+            raise ValueError("MosaiChunk H3 memory does not support a latent noise mask")
         if float(guider.cfg) != 1.:
             raise ValueError("MosaiChunk RAVEN memory requires CFG 1 (use BasicGuider or CFGGuider with cfg=1)")
         if type(guider).__name__ not in ("CFGGuider", "Guider_Basic"):
@@ -112,28 +135,38 @@ class MemoryController:
         for entry in guider.original_conds.get("positive", ()):
             extras = {k: v for k, v in entry.items() if k not in ("cross_attn", "model_conds", "uuid")}
             if entry.get("model_conds"):
-                raise ValueError("Preprocessed model conditions are unsupported in MosaiChunk T2V memory")
+                raise ValueError("Preprocessed model conditions are unsupported in MosaiChunk H3 memory")
             positive.append([entry.get("cross_attn"), extras])
         # Validate before reopening the local model or reading the 5 GB adapter.
+        request = parse_latent(latent)
+        positive, image_context = split_conditioning(positive, request)
         parse_conditioning(positive)
-        parse_latent(latent)
         if not self.conditioning_path or not self.adapter_path:
-            raise ValueError("Select the converted FL2VA conditioning file and RAVEN adapter for T2V memory")
+            raise ValueError("Select the converted FL2VA conditioning file and RAVEN adapter for H3 memory")
         clean = strip_controller(guider.model_patcher)
         resolve_transformer_options(clean)
         steps = len(sigmas) - 1
-        controls = self.controls
-        notify(self.node_id, f"Memory active: T2V, RAVEN consistency, {steps} steps per chunk. "
+        controls = dict(self.controls)
+        # Preserve the incoming variant's modulation even for text-only use
+        # of REF2VA/all-in-one checkpoints. On the original FL2VA base this
+        # delta addition reproduces the converted conditioning itself.
+        controls['conditioning_transfer'] = True
+        controls['conditioning_base_path'] = conditioning_baseline(controls.get('conditioning_base_unet', 'auto'))
+        notify(self.node_id, f"Preparing memory: {mode}, RAVEN consistency, {steps} steps per chunk. "
                              "Using sampler seed/noise/step count; solver and sigma grid replaced by RAVEN recipe.")
-        prepared = prepare_model(clean, self.conditioning_path, self.adapter_path, controls)
         config = SamplerConfig(steps=steps, seed=int(seed or 0),
                                video_shift=controls["video_shift"], audio_shift=controls["audio_shift"],
                                sink=1, window=2 + controls["far_memory_chunks"],
                                kv_cache_storage=controls["kv_cache_storage"])
+        if image_context.active:
+            image_context.validate_schedule(config)
+        prepared = prepare_model(clean, self.conditioning_path, self.adapter_path, controls)
         request = parse_latent(latent, warn_experimental=False)
         layout = request.layout(parse_conditioning(positive).text_len, warn_experimental=False)
+        if image_context.active:
+            layout = ConditionedLayout(layout, image_context)
         from .nodes import estimate_rollout_budget, dit_dimensions
-        budget = estimate_rollout_budget(layout=layout, text_len=layout.text_len,
+        budget = estimate_rollout_budget(layout=layout, text_len=layout.prefix_rows,
             sink=config.sink, window=config.window, dims=dit_dimensions(prepared),
             kv_cache_storage=config.kv_cache_storage)
         callback_workspace = 4 * latent_image.numel() * 4 if callback is not None else 0
@@ -168,18 +201,25 @@ class MemoryController:
             # as the old sampler; leave residency decisions to ComfyUI.
             mm.load_models_gpu(models, memory_required=budget.total_bytes + callback_workspace, force_full_load=False)
             prepared.pre_run()
+            notify(self.node_id, f"Memory active: {mode}; {layout.prefix_rows} permanent context rows, {steps} RAVEN steps per chunk."
+                                 + (' Experimental image-conditioned router/adapter transfer.' if image_context.active else ''))
 
         try:
             with mm.cuda_device_context(prepared.load_device), torch.inference_mode():
                 result = sample_streaming(
                     model=prepared, positive=positive, latent=latent, config=config,
                     initial_noise=tuple(comfy.utils.unpack_latents(noise, latent_shapes)),
+                    image_context=image_context,
                     on_step=on_step, load_models=load_models,
                     cancel_check=mm.throw_exception_if_processing_interrupted,
                     cache_factory=self.cache_factory_builder(prepared),
                 )
-            notify(self.node_id, f"Memory complete: {result.num_chunks} chunks; history released.")
+            notify(self.node_id, f"Memory complete: {mode}, {result.num_chunks} chunks; "
+                                 f"{result.kv_cache.get('retrievals', 0)} historical retrievals; history released.")
             return comfy.utils.pack_latents(result.latent["samples"].unbind())[0].float()
+        except Exception as exc:
+            notify(self.node_id, f"Memory stopped: {type(exc).__name__}: {str(exc)[:200]}")
+            raise
         finally:
             prepared.cleanup()
 
