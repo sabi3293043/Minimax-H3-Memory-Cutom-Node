@@ -43,7 +43,7 @@ class MosaiChunkH3StreamingSampler(RAVENStreamingSampler):
         required["history_ram_gib"] = ("FLOAT", {"default": 8.0, "min": 1.0, "max": 256.0,
                                                "tooltip": "Maximum host memory for the history bank and router, separate from model weights."})
         required["memory_mode"] = (["mosaichunk", "matched_window"], {"default": "mosaichunk",
-                                    "tooltip": "matched_window keeps the same active context budget without historical retrieval, for A/B testing."})
+                                    "tooltip": "matched_window keeps the same visual-token budget without historical retrieval, for A/B testing."})
         return schema
 
     def sample(self, model, positive, latent, video_vae, audio_vae, seed,

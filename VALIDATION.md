@@ -14,6 +14,7 @@ This is an experimental local port. The following results were collected on 2026
 | Tiny CUDA H3 integration | Six chunks and three historical retrievals passed on RTX 4090 using BF16 and CPU-backed KV | Tiny random model; exercises the GPU/CPU transfer and attention paths, not trained full-model generation |
 | Released T2V router | SHA256 verified; all 13,648,896 parameters loaded strictly | Tests checkpoint compatibility |
 | Router parity against pinned source | Query/key descriptors bitwise equal; 40 unique selected sections; mean gate ~1 | Deterministic synthetic descriptors, not generated-video evaluation |
+| Existing trained video/audio VAEs | Incremental decode returned 22 finite 512×320 RGB frames and a finite stereo 32 kHz waveform | Zero AV latents; proves the collector/decoder path, not generated-video quality |
 
 The inherited backend's upstream real-weight validation belongs to that upstream project. Its H200 experiments with a simulated 24 GiB VRAM envelope do not establish that this port has generated video on an RTX 4090. See [upstream validation](https://github.com/YanzuoLu/ComfyUI-MiniMax-H3-RAVEN-Streaming/blob/main/docs/validation.md).
 

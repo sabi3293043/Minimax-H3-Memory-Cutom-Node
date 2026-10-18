@@ -27,9 +27,11 @@ ARTIFACTS = [
 def verify(path, expected_size, expected_hash):
     if path.stat().st_size != expected_size:
         raise ValueError(f"Unexpected file size: {path}")
+    hasher = hashlib.sha256()
     with path.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    if digest != expected_hash:
+        for block in iter(lambda: stream.read(8 * 1024 ** 2), b""):
+            hasher.update(block)
+    if hasher.hexdigest() != expected_hash:
         raise ValueError(f"SHA256 mismatch: {path}")
 
 
