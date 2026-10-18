@@ -238,6 +238,6 @@ class MosaiChunkKVCache(ChunkKVCache):
         self._selection_chunk = None
 
     def stats(self):
-        return {**super().stats(), "mosaichunk": True, "history_bytes": self.history_bytes,
+        return {**super().stats(), "mosaichunk": True, "active_rows": self.past_rows(0), "history_bytes": self.history_bytes,
                 "peak_history_bytes": self._peak_history_bytes, "retrievals": self.retrievals,
                 "selected_sections": self.selected_sections, "far_budget": self.settings.far_budget}

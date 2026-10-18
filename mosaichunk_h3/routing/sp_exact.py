@@ -7,17 +7,8 @@ import torch
 
 def sp_group():
     """The sequence-parallel group, or None when there is no parallelism."""
-    try:
-        from common.distributed.unified_parallel import (
-            get_unified_parallel_group,
-            get_unified_parallel_world_size,
-            is_unified_parallel_initialized,
-        )
-
-        if is_unified_parallel_initialized() and get_unified_parallel_world_size() > 1:
-            return (get_unified_parallel_group(), get_unified_parallel_world_size())
-    except Exception:
-        pass
+    # This ComfyUI backend is single-GPU. Do not import another custom node's
+    # top-level common package or join a distributed group it happens to own.
     return (None, 1)
 
 

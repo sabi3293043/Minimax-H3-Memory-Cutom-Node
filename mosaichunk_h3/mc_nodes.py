@@ -38,7 +38,7 @@ class MosaiChunkH3StreamingSampler(RAVENStreamingSampler):
         required.pop("sink")
         required.pop("window")
         required["kv_cache_storage"] = (["cpu", "cpu_pinned"], {"default": "cpu"})
-        required["router_name"] = (folder_paths.get_filename_list(ROUTER_FOLDER),)
+        required["router_name"] = ([name.replace("\\", "/") for name in folder_paths.get_filename_list(ROUTER_FOLDER)],)
         required["far_memory_chunks"] = ("INT", {"default": 1, "min": 1, "max": 2})
         required["history_ram_gib"] = ("FLOAT", {"default": 8.0, "min": 1.0, "max": 256.0,
                                                "tooltip": "Maximum host memory for the history bank and router, separate from model weights."})

@@ -25,6 +25,7 @@
     "MosaiChunk host history and router node",
     "Execution-local cache factory and per-chunk read hook",
     "Separate preview event/route identity",
+    "Single-GPU sp_exact group; no unrelated common package imports",
     "Pinned explicit model downloader and conservative workflows"
   ]
 }

@@ -5,6 +5,7 @@ This is an experimental local port. The following results were collected on 2026
 | Check | Observed result | Limit |
 |---|---|---|
 | Installed ComfyUI feature probe | All required features passed on ComfyUI 0.37.0, Python 3.12.13, Torch 2.10.0+cu130 | Checks API availability, not generation |
+| Live isolated ComfyUI API | Both nodes imported; router selectable; LATENT/IMAGE/AUDIO sockets exposed; normal server still responding | Example socket/choice validation passed except the full checkpoint, whose download was still pending |
 | New memory/downloader tests | 5 passed | Synthetic keys, small CPU tensors and artifact-integrity checks |
 | Inherited cache/storage/rollout/schedule regression tests | 340 passed | Tested against this fork's cache factory/hook changes; two expectations updated to require complete cleanup after failure; fake model used for rollout tests |
 | Preview JavaScript protocol/state/identity tests | 32/32 passed | No browser rendering claim |
