@@ -20,6 +20,10 @@ if _PLUGIN_ROOT not in sys.path:
 from mosaichunk_h3 import install_preview
 from mosaichunk_h3.mc_nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
 
+from mosaichunk_h3.native_visual_observer import MosaiChunkH3NativeVisualObserver
+NODE_CLASS_MAPPINGS["MosaiChunkH3NativeVisualObserver"] = MosaiChunkH3NativeVisualObserver
+NODE_DISPLAY_NAME_MAPPINGS["MosaiChunkH3NativeVisualObserver"] = "MosaiChunk H3 Native Visual Observer (experimental)"
+
 WEB_DIRECTORY = "./web"
 
 try:
