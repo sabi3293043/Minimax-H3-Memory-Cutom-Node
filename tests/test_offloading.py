@@ -1,5 +1,6 @@
 import sys
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 import torch
@@ -10,6 +11,14 @@ from mosaichunk_h3.runtime_linear import attach_residual
 
 
 class OffloadingTests(unittest.TestCase):
+    def test_prepared_dynamic_lane_propagates_native_prefetch_without_mutating_model_options(self):
+        from mosaichunk_h3.contracts import resolve_transformer_options
+        model_options = {"mosaichunk_dynamic_ready": True, "transformer_options": {}}
+        patcher = SimpleNamespace(model_options=model_options, wrappers={}, is_dynamic=lambda: True)
+        options = resolve_transformer_options(patcher)
+        self.assertTrue(options["prefetch_dynamic_vbars"])
+        self.assertEqual(model_options["transformer_options"], {})
+
     def test_adapter_conversion_occurs_once_per_forward_not_per_row_chunk(self):
         torch.manual_seed(10)
         linear = torch.nn.Linear(16, 8, bias=False)

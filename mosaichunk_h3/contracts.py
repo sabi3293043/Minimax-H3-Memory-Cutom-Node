@@ -608,7 +608,13 @@ def resolve_transformer_options(patcher: Any) -> Dict[str, Any]:
             "the MODEL carries hooks the RAVEN streaming sampler cannot honour:\n  "
             + "\n  ".join(problems)
         )
-    return dict(to)
+    options = dict(to)
+    # BaseModel._apply_model normally supplies this native switch. The causal
+    # lane bypasses that method, so propagate the prepared patcher's policy
+    # here as well; otherwise its native block prefetch queue stays disabled.
+    if model_options.get("mosaichunk_dynamic_ready", False):
+        options["prefetch_dynamic_vbars"] = bool(patcher.is_dynamic())
+    return options
 
 
 def resolve_model(model: Any, *, require_upstream_class: bool = True) -> ResolvedModel:
