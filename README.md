@@ -111,6 +111,11 @@ It decodes separately from KJ Model Preview Override and can slow sampling,
 particularly because temporal TAEH3 must process the full sequence to examine
 late video frames. This work remains experimental.
 
+A new read-only cross-step retrieval interface can inspect references from
+earlier denoising predictions and read their temporarily cached images. It
+does **not** inject those images into H3 or alter subsequent predictions.
+The next milestone is a validated model-conditioning or guidance mechanism.
+
 See [NATIVE_MEMORY_STATUS.md](NATIVE_MEMORY_STATUS.md) for milestones and
 remaining native memory-injection work.
 

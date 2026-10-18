@@ -57,6 +57,24 @@ and existing third-party model patches.
   and native-executor continuity. Tests are synthetic; no GPU H3 generation
   has been tested.
 
+## Fourth milestone: cross-step retrieval interface (read-only)
+
+- `memory_feedback.py` ranks bounded candidate references from *earlier*
+  denoising steps for different frames in the same predicted video, using the
+  retained RGB-thumbnail descriptors.
+- The native observer computes each frame descriptor once per step, queries
+  its historical index **before** adding the current observations, and
+  optionally provides proposals plus a disk-read function to a diagnostic
+  `feedback_hook`. The hook is internal, not a user-facing correction control.
+- The hook cannot receive or modify sampler tensors and failures are isolated
+  from sampling. Temporal distance, confidence and similarity safeguards
+  prevent self-matching or using future predictions as past references.
+- This is **not** evidence that the correct character or object has been
+  matched; coarse RGB similarity has limited semantic ability.
+- Local synthetic tests cover retrieval ordering, temporal filtering,
+  callback preservation and cleanup. Real H3, Spectrum and Sage runs are
+  still untested. **No memory guidance is injected yet.**
+
 ## Remaining milestones (not implemented here)
 
 1. Share TAEH3 decoder outputs with KJ preview without double decode; add safe full-video observation resource budgets.

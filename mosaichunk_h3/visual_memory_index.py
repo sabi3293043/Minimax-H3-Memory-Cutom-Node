@@ -55,7 +55,7 @@ class AdaptiveVisualIndex:
                 parts.append(thumb.flatten(1).clamp(0, 1).to(device="cpu"))
             return torch.cat(parts, dim=0)
 
-    def candidates(self, frames, *, step: int):
+    def candidates(self, frames, *, step: int, descriptors=None):
         """Choose frame IDs by content changes and similarity, not intervals.
 
         Returns (frame index, CPU descriptor, cross-step stability).
@@ -63,7 +63,9 @@ class AdaptiveVisualIndex:
         import torch
         if step < 0:
             raise ValueError("step must be nonnegative")
-        x = self.descriptors(frames)
+        x = self.descriptors(frames) if descriptors is None else descriptors
+        if x.ndim != 2 or x.shape[0] != frames.shape[0] or x.shape[1] != 108:
+            raise ValueError("precomputed visual descriptors must be [T,108]")
         n = int(x.shape[0])
         transition = torch.zeros(n)
         if n > 1:

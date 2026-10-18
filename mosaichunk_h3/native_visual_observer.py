@@ -14,6 +14,7 @@ import sys
 
 from .visual_memory_disk import VisualMemoryDisk
 from .visual_memory_index import AdaptiveVisualIndex
+from .memory_feedback import retrieve_step_references
 
 TINY_VAE_URL = "https://github.com/madebyollin/taehv/blob/main/safetensors/taeh3.safetensors"
 
@@ -119,7 +120,7 @@ class NativeVisualObserver:
     """Lifecycle-bound observer; does not alter denoising predictions."""
 
     def __init__(self, *, tiny_vae_name, max_frames, min_progress, disk_gib,
-                 max_memory_frames=24, temp_root=None):
+                 max_memory_frames=24, temp_root=None, feedback_hook=None):
         if not 1 <= int(max_frames) <= 64:
             raise ValueError("max_frames must be between 1 and 64")
         if not 1 <= int(max_memory_frames) <= 256:
@@ -134,6 +135,7 @@ class NativeVisualObserver:
         self.min_progress = float(min_progress)
         self.disk_gib = float(disk_gib)
         self.temp_root = temp_root
+        self.feedback_hook = feedback_hook
 
     def __call__(self, executor, noise, latent_image, sampler, sigmas,
                  denoise_mask=None, callback=None, disable_pbar=False,
@@ -155,7 +157,27 @@ class NativeVisualObserver:
                             # Temporal TAEH3 maintains state; decode all frames
                             # to see late frames. This can be slow on long clips.
                             frames = decoder.decode_video(video[:1], frame_indices=None)
-                            for frame_id, descriptor, confidence in index.candidates(frames, step=step):
+                            # Calculate descriptors once, and retrieve historical
+                            # suggestions BEFORE updating the memory index.
+                            descriptors = index.descriptors(frames)
+                            references = retrieve_step_references(
+                                descriptors, index.entries, step=step,
+                                max_references=self.max_frames,
+                            )
+                            # The feedback hook is diagnostic-only. It cannot
+                            # mutate the sampler's x0/x or model predictions;
+                            # actual guidance requires a validated integration.
+                            if references and self.feedback_hook is not None:
+                                try:
+                                    self.feedback_hook(step, tuple(references), store.read)
+                                except Exception:
+                                    LOG.warning(
+                                        "Native visual feedback hook failed; sampling unaffected",
+                                        exc_info=True,
+                                    )
+                            for frame_id, descriptor, confidence in index.candidates(
+                                frames, step=step, descriptors=descriptors
+                            ):
                                 record = store.save(
                                     step=step, frame=frame_id,
                                     data=_to_webp(frames[frame_id]), fmt="webp"
