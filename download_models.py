@@ -39,7 +39,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--comfy-root", type=Path, required=True)
     parser.add_argument("--components", choices=("router", "adapter", "base"), nargs="+",
-                        default=["router", "adapter", "base"])
+                        default=["router", "adapter"],
+                        help="Defaults to router and adapter. Full BF16 base requires an explicit --components base.")
     parser.add_argument("--plan", action="store_true", help="Show files/sizes without downloading.")
     parser.add_argument("--verify", action="store_true", help="Also hash existing files (reads 66 GB for the base).")
     args = parser.parse_args()

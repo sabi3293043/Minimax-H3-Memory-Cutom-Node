@@ -62,6 +62,7 @@ inference-safe). Peak FP32 temporaries are therefore
 from __future__ import annotations
 
 import os
+import functools
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -335,7 +336,21 @@ def _is_quantized(weight: torch.Tensor) -> bool:
     return hasattr(weight, "_layout_cls") or type(weight).__name__ == "QuantizedTensor"
 
 
-def _validate_module(module: nn.Module, path: str) -> None:
+@functools.lru_cache(maxsize=None)
+def _residual_quantized_class(base_class):
+    class ResidualQuantizedLinear(base_class):
+        raven_residual_state = True
+        def state_dict(self, *args, **kwargs):
+            result = super().state_dict(*args, **kwargs)
+            prefix = kwargs.get("prefix", args[1] if len(args) > 1 else "")
+            for name, param in self.named_parameters(recurse=False):
+                if name.startswith(("raven_lora_A_", "raven_lora_B_")):
+                    result[prefix + name] = param if kwargs.get("keep_vars", False) else param.detach()
+            return result
+    return ResidualQuantizedLinear
+
+
+def _validate_module(module: nn.Module, path: str, allow_quantized=False) -> None:
     if not isinstance(module, nn.Module):
         raise RavenAttachError("{}: not an nn.Module".format(path))
     weight = getattr(module, "weight", None)
@@ -345,7 +360,7 @@ def _validate_module(module: nn.Module, path: str) -> None:
         raise RavenAttachError(
             "{}: expected a 2D Linear weight, got shape {}".format(path, tuple(weight.shape))
         )
-    if _is_quantized(weight):
+    if _is_quantized(weight) and not allow_quantized:
         raise RavenAttachError(
             "{}: weight is a quantized tensor. comfy.ops.linear_input_act bypasses "
             "Linear.__call__ for INT8 layouts, so a forward hook would silently not "
@@ -379,14 +394,18 @@ def attach_residual(
     strength: float = 1.0,
     name: str = "raven_lora",
     row_chunk: Optional[int] = None,
+    allow_quantized: bool = False,
 ) -> Tuple[ResidualSpec, Optional[object]]:
     """Register A/B as direct parameters of ``module`` and hook the residual.
 
     Returns ``(spec, handle)`` where ``handle`` is the newly created hook handle
     or ``None`` when the module already carried a RAVEN hook.
     """
-    _validate_module(module, path)
+    _validate_module(module, path, allow_quantized=allow_quantized)
     weight = module.weight
+    if allow_quantized and _is_quantized(weight) and not getattr(type(module), "raven_residual_state", False):
+        cls = _residual_quantized_class(type(module))
+        module.__class__ = cls
     if a.dim() != 2 or b.dim() != 2:
         raise RavenAttachError("{}: lora_A/lora_B must be 2D".format(path))
     if int(a.shape[0]) != int(b.shape[1]):
@@ -397,7 +416,9 @@ def attach_residual(
         raise RavenAttachError(
             "{}: declared rank {} != A rank {}".format(path, rank, a.shape[0])
         )
-    if int(a.shape[1]) != int(weight.shape[1]) or int(b.shape[0]) != int(weight.shape[0]):
+    in_features = module.in_features if allow_quantized else weight.shape[1]
+    out_features = module.out_features if allow_quantized else weight.shape[0]
+    if int(a.shape[1]) != int(in_features) or int(b.shape[0]) != int(out_features):
         raise RavenAttachError(
             "{}: A{} / B{} do not fit base weight {}".format(
                 path, tuple(a.shape), tuple(b.shape), tuple(weight.shape)
@@ -575,7 +596,8 @@ class RavenLoraAttachment:
 
 
 def attach_residuals(
-    plan: Iterable[ResidualPlan], name: str = "raven_lora", row_chunk: Optional[int] = None
+    plan: Iterable[ResidualPlan], name: str = "raven_lora", row_chunk: Optional[int] = None,
+    allow_quantized: bool = False,
 ) -> RavenLoraAttachment:
     """Attach a whole adapter; rolls back completely if any module fails."""
     entries: List[AttachedResidual] = []
@@ -591,6 +613,7 @@ def attach_residuals(
                 strength=item.strength,
                 name=name,
                 row_chunk=item.row_chunk if item.row_chunk is not None else row_chunk,
+                allow_quantized=allow_quantized,
             )
             entries.append(
                 AttachedResidual(

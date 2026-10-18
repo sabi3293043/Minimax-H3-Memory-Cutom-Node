@@ -9,6 +9,7 @@ import torch
 
 from .memory import MemorySettings, MosaiChunkKVCache
 from .nodes import RAVENModelLoader, RAVENStreamingSampler
+from .conditioning import prepare_model
 from .routing.selector import Selector
 
 ROUTER_FOLDER = "mosaichunk"
@@ -21,12 +22,52 @@ class MosaiChunkH3ModelLoader(RAVENModelLoader):
     DESCRIPTION = "Load the full non-pruned H3 model with the mandatory RAVEN streaming adapter."
 
 
+class MosaiChunkH3Conditioning:
+    CATEGORY = "MiniMax H3/MosaiChunk"
+    DESCRIPTION = (
+        "Apply streaming conditioning to an existing pruned FL2VA H3 MODEL. "
+        "Connect UNET Loader and your own LoRA chain before this node. "
+        "Use the output with MosaiChunk H3 Streaming Sampler. Controls here override "
+        "the sampler's matching settings. RAVEN strength is fixed at 1 because the "
+        "conditioning file contains its trained timestep and modulation updates."
+    )
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    FUNCTION = "apply"
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "model": ("MODEL",),
+            "conditioning_name": (folder_paths.get_filename_list(ROUTER_FOLDER),
+                                  {"default": "raven-fl2va-conditioning.safetensors"}),
+            "raven_lora": (folder_paths.get_filename_list("loras"),
+                           {"default": "minimax_h3_raven_streaming_lora_4nfe_preview.safetensors",
+                            "tooltip": "Mandatory RAVEN adapter. Keep your other LoRAs on the incoming MODEL chain."}),
+            "video_shift": ("FLOAT", {"default": 12.0, "min": 0.01, "max": 30.0, "step": 0.1}),
+            "audio_shift": ("FLOAT", {"default": 3.0, "min": 0.01, "max": 30.0, "step": 0.1}),
+            "kv_cache_storage": (["cpu", "cpu_pinned"], {"default": "cpu"}),
+            "far_memory_chunks": ("INT", {"default": 1, "min": 1, "max": 2}),
+            "history_ram_gib": ("FLOAT", {"default": 8.0, "min": 1.0, "max": 256.0, "step": 1.0}),
+            "memory_mode": (["mosaichunk", "matched_window"], {"default": "mosaichunk"}),
+        }}
+
+    def apply(self, model, conditioning_name, raven_lora, video_shift=12., audio_shift=3.,
+              kv_cache_storage="cpu", far_memory_chunks=1, history_ram_gib=8., memory_mode="mosaichunk"):
+        conditioning_path = folder_paths.get_full_path_or_raise(ROUTER_FOLDER, conditioning_name)
+        adapter_path = folder_paths.get_full_path_or_raise("loras", raven_lora)
+        controls = dict(video_shift=float(video_shift), audio_shift=float(audio_shift),
+                        kv_cache_storage=kv_cache_storage, far_memory_chunks=int(far_memory_chunks),
+                        history_ram_gib=float(history_ram_gib), memory_mode=memory_mode)
+        return (prepare_model(model, conditioning_path, adapter_path, controls),)
+
+
 class MosaiChunkH3StreamingSampler(RAVENStreamingSampler):
     CATEGORY = "MiniMax H3/MosaiChunk"
     DESCRIPTION = (
         "Experimental MosaiChunk T2VA port: two recent chunks plus one/two chunks of retrieved visual memory. "
         "History stays in system RAM; GPU memory is assembled one layer at a time. "
-        "Use the full RAVEN H3 model, an empty AV latent and text-only conditioning. "
+        "Use a RAVEN-conditioned H3 MODEL, an empty AV latent and text-only conditioning. "
         "Start at 512x320 / 90 frames / 4 steps / CPU history / 8 GiB history budget. "
         "This port has not reproduced the paper's multi-GPU benchmark."
     )
@@ -49,6 +90,13 @@ class MosaiChunkH3StreamingSampler(RAVENStreamingSampler):
     def sample(self, model, positive, latent, video_vae, audio_vae, seed,
                router_name, far_memory_chunks=1, history_ram_gib=8.0, memory_mode="mosaichunk",
                steps=4, video_shift=12.0, audio_shift=3.0, kv_cache_storage="cpu", unique_id=None):
+        controls = model.model_options.get("mosaichunk_controls")
+        if controls is not None:
+            video_shift, audio_shift = controls["video_shift"], controls["audio_shift"]
+            kv_cache_storage = controls["kv_cache_storage"]
+            far_memory_chunks = controls["far_memory_chunks"]
+            history_ram_gib = controls["history_ram_gib"]
+            memory_mode = controls["memory_mode"]
         if memory_mode not in ("mosaichunk", "matched_window"):
             raise ValueError("memory_mode must be mosaichunk or matched_window.")
         if int(far_memory_chunks) not in (1, 2):
@@ -88,8 +136,10 @@ class MosaiChunkH3StreamingSampler(RAVENStreamingSampler):
 NODE_CLASS_MAPPINGS = {
     "MosaiChunkH3ModelLoader": MosaiChunkH3ModelLoader,
     "MosaiChunkH3StreamingSampler": MosaiChunkH3StreamingSampler,
+    "MosaiChunkH3Conditioning": MosaiChunkH3Conditioning,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MosaiChunkH3ModelLoader": "MosaiChunk H3 RAVEN Model Loader",
     "MosaiChunkH3StreamingSampler": "MosaiChunk H3 Streaming Sampler",
+    "MosaiChunkH3Conditioning": "MosaiChunk H3 Conditioning",
 }

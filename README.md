@@ -2,6 +2,8 @@
 
 **Experimental local ComfyUI port of MosaiChunk's T2V memory router. Full-size video generation and quality are not yet validated by this repository.**
 
+**Existing pruned/INT8 FL2VA checkpoint:** use the **MosaiChunk H3 Conditioning** node (MODEL input and output) and the compact converted conditioning described in [PRUNED.md](PRUNED.md). This path keeps your existing generator and does not require downloading the full BF16 checkpoint. The full-model instructions below describe the separate original loader.
+
 MosaiChunk retrieves details from earlier chunks when an object or scene returns. Older attention keys/values stay in system RAM. Only selected history for one transformer layer is brought onto the GPU at a time. Memory lasts for one sampler execution; it is released afterward.
 
 This package extends [YanzuoLu's RAVEN ComfyUI backend](https://github.com/YanzuoLu/ComfyUI-MiniMax-H3-RAVEN-Streaming), using the [released MosaiChunk T2V router](https://github.com/mosaichunk/MosaiChunk). It is an independent integration, not an official release or a reproduction of the paper's multi-GPU benchmark.
@@ -38,7 +40,7 @@ Also required, and reusable from an existing H3 setup:
 
 The downloader pins revisions and checks SHA256 hashes. It preserves existing files. `--components router adapter` skips the base download; `--verify` checks existing model contents as well.
 
-**Pruned/adaln-curve H3 checkpoints cannot substitute for the full model.** RAVEN requires the original time-embedding and modulation layers. Quantized model formats are not supported by the inherited RAVEN loader.
+The original **MosaiChunk H3 RAVEN Model Loader** requires the full model. Pruned/quantized FL2VA checkpoints use the separate loader and converted conditioning in [PRUNED.md](PRUNED.md).
 
 ## Workflow
 
@@ -65,7 +67,7 @@ At 512×320, stored KV is roughly 1.15 GiB per full media chunk. The provided 90
 
 GPU memory contains model working weights, activations, and one layer's assembled attention memory. It does **not** hold all 50 layers' historical KV simultaneously. Moving data over PCIe and CPU routing adds latency. Other GPU workloads should be paused before testing.
 
-Current scope: text-to-video-and-audio, batch one, one GPU, one prompt per run, CPU or CPU-pinned history. Image/reference conditioning, persistent memory across runs, interactive prompt schedules, GGUF/pruned models, and paper-level reproducibility are not implemented.
+Current scope: text-to-video-and-audio, batch one, one GPU, one prompt per run, CPU or CPU-pinned history. Pruned/INT8 FL2VA has a MODEL-to-MODEL conditioning node. Image/reference conditioning, persistent memory across runs, interactive prompt schedules, GGUF, and paper-level reproducibility are not implemented.
 
 ## Validation
 

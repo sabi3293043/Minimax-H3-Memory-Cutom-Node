@@ -26,6 +26,9 @@
     "Execution-local cache factory and per-chunk read hook",
     "Separate preview event/route identity",
     "Single-GPU sp_exact group; no unrelated common package imports",
-    "Pinned explicit model downloader and conservative workflows"
+    "Pinned explicit model downloader and conservative workflows",
+    "MODEL-to-MODEL RAVEN conditioning for pruned FL2VA models",
+    "Exact HTTP-range conditioning conversion; no full checkpoint saved",
+    "Quantized MLP residual dispatch and complete adapter memory accounting"
   ]
 }
