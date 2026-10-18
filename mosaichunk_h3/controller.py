@@ -75,8 +75,15 @@ def notify(node_id, message):
         LOG.debug("Could not deliver optional memory status widget event", exc_info=True)
 
 
-def strip_controller(model):
-    """Remove only our wrapper, keeping all unrelated hooks for validation."""
+def is_preview_wrapper(wrapper):
+    """Known callback-only adapter; never infer compatibility from its key alone."""
+    cls = type(wrapper)
+    return (cls.__name__ == '_PreviewOverrideWrapper'
+            and cls.__module__.rsplit('.', 1)[-1] == 'preview_override_node')
+
+
+def strip_controller(model, *, handled_previews=False):
+    """Remove hooks executed outside the chunk loop, preserving all others."""
     from comfy.patcher_extension import WrappersMP, copy_nested_dicts
     model = model.clone()
     model.remove_wrappers_with_key(WrappersMP.OUTER_SAMPLE, KEY)
@@ -86,6 +93,17 @@ def strip_controller(model):
     wrappers = to.get("wrappers", {})
     groups = wrappers.get(WrappersMP.OUTER_SAMPLE, {})
     groups.pop(KEY, None)
+    if handled_previews:
+        for registry in (model.wrappers, wrappers):
+            outer = registry.get(WrappersMP.OUTER_SAMPLE, {})
+            for key, hooks in list(outer.items()):
+                remaining = [hook for hook in hooks if not is_preview_wrapper(hook)]
+                if remaining:
+                    outer[key] = remaining
+                else:
+                    del outer[key]
+            if not outer:
+                registry.pop(WrappersMP.OUTER_SAMPLE, None)
     if not groups:
         wrappers.pop(WrappersMP.OUTER_SAMPLE, None)
     if not wrappers:
@@ -110,6 +128,26 @@ class MemoryController:
             notify(self.node_id, f"Memory inactive ({mode}); using normal H3 generation and sampler.")
             return executor(noise, latent_image, sampler, sigmas, denoise_mask,
                             callback, disable_pbar, seed, latent_shapes=latent_shapes)
+        # Native OUTER_SAMPLE hooks may occur on either side of this node.
+        # Earlier preview hooks already wrap us. Execute later ones around the
+        # chunk loop instead of skipping them or calling the native ODE sampler.
+        clean = strip_controller(guider.model_patcher, handled_previews=True)
+        resolve_transformer_options(clean)
+        from comfy.patcher_extension import WrapperExecutor
+        pending = executor.wrappers[executor.idx + 1:]
+        if any(not is_preview_wrapper(hook) for hook in pending):
+            raise ValueError('MosaiChunk memory cannot honour an unknown outer_sample wrapper')
+
+        def terminal(*args, **kwargs):
+            return self.sample_memory(guider, mode, clean, *args, **kwargs)
+
+        return WrapperExecutor.new_class_executor(terminal, guider, pending).execute(
+            noise, latent_image, sampler, sigmas, denoise_mask, callback,
+            disable_pbar, seed, latent_shapes=latent_shapes)
+
+    def sample_memory(self, guider, mode, clean, noise, latent_image, sampler, sigmas,
+                      denoise_mask=None, callback=None, disable_pbar=False,
+                      seed=None, latent_shapes=None):
         # RAVEN is a consistency model. The host provides step count, seed and
         # initial noise; its numerical solver/sigma values are explicitly replaced
         # by the trained fresh-noise recipe, rather than approximated as an ODE.
@@ -143,8 +181,6 @@ class MemoryController:
         parse_conditioning(positive)
         if not self.conditioning_path or not self.adapter_path:
             raise ValueError("Select the converted FL2VA conditioning file and RAVEN adapter for H3 memory")
-        clean = strip_controller(guider.model_patcher)
-        resolve_transformer_options(clean)
         steps = len(sigmas) - 1
         controls = dict(self.controls)
         # Preserve the incoming variant's modulation even for text-only use

@@ -1,5 +1,13 @@
 # Validation status
 
+## KJ preview compatibility correction
+
+The controller now runs downstream KJ Model Preview Override wrappers around the chunk loop using ComfyUI's native WrapperExecutor. Upstream preview wrappers already surround the controller and are not run twice. Only the inspected callback-only preview class is accepted; an unrelated function registered under the same key still fails validation. Unknown sampling hooks retain the explicit rejection, now identifying their keys.
+
+The selected CPU regression suite passed **404 tests** (two warnings), including five checks against the actual installed KJ preview wrapper: both node orders, six captured preview frames and forwarded callbacks, cleanup after an exception, rejection of an unknown hook, and rejection of a preview-key impostor. These five tests skip when KJNodes is not installed.
+
+The tiny native CFGGuider/H3/router/cache probe also passed with the actual downstream KJ wrapper in text, first/last-frame and reference modes: 24 preview frames per mode, six chunks, three historical retrievals, unchanged trained-recipe tensor parity, audio callback scaling and cancellation cleanup. Preparation is substituted with a tiny CPU model; no trained GPU generation, tiny VAE/audio decoder performance or browser rendering is established by these checks.
+
 This is an experimental local port. The following results were collected on 2026-10-18. Full-model video generation, output quality, and peak full-model memory have not yet been established by this repository.
 
 | Check | Observed result | Limit |

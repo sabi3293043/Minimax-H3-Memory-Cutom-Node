@@ -598,8 +598,9 @@ def resolve_transformer_options(patcher: Any) -> Dict[str, Any]:
 
     wrappers = getattr(patcher, "wrappers", None)
     if wrappers:
+        wrapper_keys = {str(kind): list(map(str, groups)) for kind, groups in wrappers.items()}
         problems.append(
-            f"the MODEL carries patcher wrappers {sorted(map(str, wrappers))}; they wrap "
+            f"the MODEL carries patcher wrappers {wrapper_keys}; they wrap "
             "comfy.samplers entry points that the chunk-major loop never calls"
         )
 

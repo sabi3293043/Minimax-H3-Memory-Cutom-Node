@@ -46,6 +46,8 @@ The original **MosaiChunk H3 RAVEN Model Loader** requires the full model. Prune
 
 For the controller, open `example_workflows/mosaichunk_h3_controller_test.json` and retain your existing decoder chain. The node status reports active/inactive memory.
 
+KJ's **Model Preview Override** can remain before or after the conditioning node. Its callback and cleanup run around the memory sampler; it is not silently bypassed. Other unimplemented sampling hooks remain rejected, with their wrapper keys included in the error.
+
 The following is the legacy full-model workflow. Open `example_workflows/mosaichunk_h3_4090_test.json` in ComfyUI. API users can submit `api_workflows/mosaichunk_h3_4090_test_api.json` to `/prompt`.
 
 1. **MosaiChunk H3 RAVEN Model Loader:** select the full H3 checkpoint and RAVEN LoRA.
