@@ -29,6 +29,9 @@
     "Pinned explicit model downloader and conservative workflows",
     "MODEL-to-MODEL RAVEN conditioning for pruned FL2VA models",
     "Exact HTTP-range conditioning conversion; no full checkpoint saved",
-    "Quantized MLP residual dispatch and complete adapter memory accounting"
+    "Quantized MLP residual dispatch and complete adapter memory accounting",
+    "Preserve incoming native offloading by default; explicit static fallback",
+    "Forward-scoped adapter transfers instead of per-row-chunk copies",
+    "Reject ordinary samplers on memory-conditioned MODEL; packaged streaming example"
   ]
 }

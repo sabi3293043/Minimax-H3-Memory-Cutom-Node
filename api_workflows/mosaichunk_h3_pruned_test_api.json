@@ -136,7 +136,8 @@
       "kv_cache_storage": "cpu",
       "far_memory_chunks": 1,
       "history_ram_gib": 8.0,
-      "memory_mode": "mosaichunk"
+      "memory_mode": "mosaichunk",
+      "offloading": "inherit"
     }
   }
 }

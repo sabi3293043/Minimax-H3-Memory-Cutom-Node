@@ -281,7 +281,11 @@ class RavenLoraForwardHook:
         if rows == 0:
             return output
 
-        params = [(getattr(module, s.a_param), getattr(module, s.b_param), s.scale) for s in active]
+        # Keep a forward-local device copy. An offloaded adapter must cross
+        # PCIe once per linear call, not again for every activation row chunk.
+        params = [(getattr(module, s.a_param).to(device=x.device, dtype=torch.float32, non_blocking=True),
+                   getattr(module, s.b_param).to(device=x.device, dtype=torch.float32, non_blocking=True),
+                   s.scale) for s in active]
         for start in range(0, rows, chunk):
             stop = min(start + chunk, rows)
             self.chunks += 1
@@ -293,14 +297,6 @@ class RavenLoraForwardHook:
             xc = x2[start:stop]
             xf = xc if xc.dtype == torch.float32 else xc.float()
             for a, b, scale in params:
-                if a.device != xf.device:
-                    a = a.to(device=xf.device, non_blocking=True)
-                if b.device != xf.device:
-                    b = b.to(device=xf.device, non_blocking=True)
-                if a.dtype != torch.float32:
-                    a = a.float()
-                if b.dtype != torch.float32:
-                    b = b.float()
                 resid = torch.nn.functional.linear(torch.nn.functional.linear(xf, a), b)
                 if scale != 1.0:
                     resid.mul_(scale)  # same rounding as `residual * scaling`

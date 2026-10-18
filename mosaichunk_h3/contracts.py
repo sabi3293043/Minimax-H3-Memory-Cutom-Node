@@ -616,10 +616,9 @@ def resolve_model(model: Any, *, require_upstream_class: bool = True) -> Resolve
 
     Requirements, each failing loudly:
 
-    * a **stock static** ``comfy.model_patcher.ModelPatcher`` -- v0.1's release
-      contract is stock partial CPU offload (``loader.RavenLoaderSpec.
-      force_static_patcher``), and the DynamicVRAM patcher has never been
-      exercised with the causal lane;
+    * a native ``comfy.model_patcher.ModelPatcher``. The original full-model
+      loader uses static offloading. The conditioning node may retain the
+      native dynamic patcher after setting up its residual memory accounting;
     * a ``diffusion_model`` that is the RAVEN causal DiT, i.e. exposes
       ``prefill_text`` / ``forward_chunk``. Duck-typed on purpose: it keeps this
       function usable against a fake in a bare environment, and the real check
@@ -632,26 +631,18 @@ def resolve_model(model: Any, *, require_upstream_class: bool = True) -> Resolve
     if model is None:
         raise ContractError("MODEL is required")
 
-    patcher_cls, dynamic_cls = _upstream_patcher_classes()
+    patcher_cls, _dynamic_cls = _upstream_patcher_classes()
     type_name = type(model).__name__
-    if type_name == "ModelPatcherDynamic" or (
-        dynamic_cls is not None and isinstance(model, dynamic_cls)
-    ):
-        raise ContractError(
-            "the MODEL is a ModelPatcherDynamic (DynamicVRAM / comfy-aimdo). v0.1 runs "
-            "on the stock ModelPatcher partial CPU offload path only; load the model "
-            "with the RAVEN Model Loader, which forces the static patcher."
-        )
     if require_upstream_class and patcher_cls is not None and not isinstance(model, patcher_cls):
         raise ContractError(
             f"MODEL must be a comfy.model_patcher.ModelPatcher, got {type_name}"
         )
 
     is_dynamic = getattr(model, "is_dynamic", None)
-    if callable(is_dynamic) and bool(is_dynamic()):
+    if callable(is_dynamic) and bool(is_dynamic()) and not getattr(model, "model_options", {}).get("mosaichunk_dynamic_ready", False):
         raise ContractError(
-            f"{type_name}.is_dynamic() is True; v0.1 runs on the stock static "
-            "ModelPatcher only"
+            "MODEL.is_dynamic() is True: prepare it with MosaiChunk H3 Conditioning before streaming; "
+            "an unprepared dynamic model has no validated RAVEN residual accounting"
         )
 
     base_model = getattr(model, "model", None)

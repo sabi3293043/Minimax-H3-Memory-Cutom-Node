@@ -41,3 +41,12 @@ The conservative workflow is intended for the first real-weight smoke test. Insp
 - An earlier real pruned-loader test reached historical retrieval (40 sections at chunk 3) before the server was closed. This is partial execution of the superseded loader, not successful completed generation or validation of the final node. No quality or final peak-memory claim follows from it.
 
 The final conditioning was rebased into the original FL2VA table coordinates, preserving the table byte for byte. Coordinate-fit relative residual: 4.08e-5; worst projection change relative to the validated conversion: 3.52e-6. This avoids rotating the coordinates used by existing pruned-trained LoRAs. No additional model download was needed.
+
+
+## Native offloading revision
+
+Ten packaged unit tests pass, including an instrumented check that adapter casts occur twice per linear call (one A and one B), independent of activation row count. CPU structural checks exercise the native ModelPatcher clone dispatch with a dynamic-reporting test subclass: inherit preserves policy, static explicitly converts it, user patches remain, and the streaming contract accepts a prepared dynamic model. Ordinary dense sampling raises a clear error before doing model work. These are CPU checks; they do not validate AIMDO GPU execution or establish a speedup. The user runs the real generation test.
+
+The changes are confined to this custom-node package and bundled examples. ComfyUI core and launch settings are untouched.
+
+The offloading revision additionally passed 222 selected inherited CPU regressions covering sampling contracts, sampler integration, phase/memory planning and Comfy linear hooks (one warning). Native AIMDO GPU execution and revised generation timing remain unmeasured.

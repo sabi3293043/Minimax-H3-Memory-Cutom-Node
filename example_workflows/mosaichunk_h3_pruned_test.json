@@ -376,7 +376,7 @@
       "outputs": [],
       "properties": {},
       "widgets_values": [
-        "Use your UNET Loader and optional LoRA chain before MosaiChunk H3 Conditioning. Select the FL2VA INT8 base already on disk. Conditioning-node memory/shift controls override matching sampler widgets. Keep router_name=t2v/model.safetensors. Experimental: generation quality needs testing."
+        "Use this separate T2VA streaming workflow first: native UNET Loader -> optional style LoRAs -> MosaiChunk H3 Conditioning (offloading=inherit) -> MosaiChunk H3 Streaming Sampler. Do not connect to KSampler or SamplerCustomAdvanced. Select the existing FL2VA INT8 model and router t2v/model.safetensors. This test does not use image/reference conditioning or SageAttention patches."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -399,7 +399,7 @@
       "outputs": [],
       "properties": {},
       "widgets_values": [
-        "Use your UNET Loader and optional LoRA chain before MosaiChunk H3 Conditioning. Select the FL2VA INT8 base already on disk. Conditioning-node memory/shift controls override matching sampler widgets. Keep router_name=t2v/model.safetensors. Experimental: generation quality needs testing."
+        "Use this separate T2VA streaming workflow first: native UNET Loader -> optional style LoRAs -> MosaiChunk H3 Conditioning (offloading=inherit) -> MosaiChunk H3 Streaming Sampler. Do not connect to KSampler or SamplerCustomAdvanced. Select the existing FL2VA INT8 model and router t2v/model.safetensors. This test does not use image/reference conditioning or SageAttention patches."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -446,7 +446,8 @@
         "cpu",
         1,
         8.0,
-        "mosaichunk"
+        "mosaichunk",
+        "inherit"
       ]
     }
   ],

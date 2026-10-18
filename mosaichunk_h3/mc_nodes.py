@@ -29,7 +29,8 @@ class MosaiChunkH3Conditioning:
         "Connect UNET Loader and your own LoRA chain before this node. "
         "Use the output with MosaiChunk H3 Streaming Sampler. Controls here override "
         "the sampler's matching settings. RAVEN strength is fixed at 1 because the "
-        "conditioning file contains its trained timestep and modulation updates."
+        "conditioning file contains its trained timestep and modulation updates. "
+        "Offloading defaults to inherit; this node does not change ComfyUI's global VRAM policy."
     )
     RETURN_TYPES = ("MODEL",)
     RETURN_NAMES = ("model",)
@@ -50,15 +51,17 @@ class MosaiChunkH3Conditioning:
             "far_memory_chunks": ("INT", {"default": 1, "min": 1, "max": 2}),
             "history_ram_gib": ("FLOAT", {"default": 8.0, "min": 1.0, "max": 256.0, "step": 1.0}),
             "memory_mode": (["mosaichunk", "matched_window"], {"default": "mosaichunk"}),
+            "offloading": (["inherit", "static"], {"default": "inherit",
+                           "tooltip": "inherit keeps the incoming ComfyUI dynamic/static offloader; static is an explicit fallback."}),
         }}
 
     def apply(self, model, conditioning_name, raven_lora, video_shift=12., audio_shift=3.,
-              kv_cache_storage="cpu", far_memory_chunks=1, history_ram_gib=8., memory_mode="mosaichunk"):
+              kv_cache_storage="cpu", far_memory_chunks=1, history_ram_gib=8., memory_mode="mosaichunk", offloading="inherit"):
         conditioning_path = folder_paths.get_full_path_or_raise(ROUTER_FOLDER, conditioning_name)
         adapter_path = folder_paths.get_full_path_or_raise("loras", raven_lora)
         controls = dict(video_shift=float(video_shift), audio_shift=float(audio_shift),
                         kv_cache_storage=kv_cache_storage, far_memory_chunks=int(far_memory_chunks),
-                        history_ram_gib=float(history_ram_gib), memory_mode=memory_mode)
+                        history_ram_gib=float(history_ram_gib), memory_mode=memory_mode, offloading=offloading)
         return (prepare_model(model, conditioning_path, adapter_path, controls),)
 
 
@@ -79,7 +82,9 @@ class MosaiChunkH3StreamingSampler(RAVENStreamingSampler):
         required.pop("sink")
         required.pop("window")
         required["kv_cache_storage"] = (["cpu", "cpu_pinned"], {"default": "cpu"})
-        required["router_name"] = ([name.replace("\\", "/") for name in folder_paths.get_filename_list(ROUTER_FOLDER)],)
+        routers = [name.replace("\\", "/") for name in folder_paths.get_filename_list(ROUTER_FOLDER)
+                   if Path(folder_paths.get_full_path_or_raise(ROUTER_FOLDER, name)).with_name("config.json").is_file()]
+        required["router_name"] = (routers, {"default": "t2v/model.safetensors"})
         required["far_memory_chunks"] = ("INT", {"default": 1, "min": 1, "max": 2})
         required["history_ram_gib"] = ("FLOAT", {"default": 8.0, "min": 1.0, "max": 256.0,
                                                "tooltip": "Maximum host memory for the history bank and router, separate from model weights."})

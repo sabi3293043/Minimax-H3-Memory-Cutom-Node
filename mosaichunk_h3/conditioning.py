@@ -6,10 +6,10 @@ from . import lora
 from .pruned import attach_pruned_raven, read_conditioning
 
 
-def prepare_model(model, conditioning_path, adapter_path, controls, *, clone=True):
+def prepare_model(model, conditioning_path, adapter_path, controls, *, clone=True, disable_dynamic=False):
     import comfy.model_management
     from comfy.ldm.minimax.model import MiniMaxH3Model
-    from .causal_model import RavenCausalMiniMaxH3Model, RavenCausalDiTBlock, RavenCausalAttention
+    from .causal_model import RavenCausalMiniMaxH3Model, MosaiChunkStreamingMiniMaxH3Model, RavenCausalDiTBlock, RavenCausalAttention
 
     root = model.get_model_object("diffusion_model")
     if not isinstance(root, MiniMaxH3Model) or not root.use_adaln_curves:
@@ -22,11 +22,12 @@ def prepare_model(model, conditioning_path, adapter_path, controls, *, clone=Tru
     factory = model.cached_patcher_init
     if factory is None:
         raise ValueError("Use ComfyUI's UNET Loader: this MODEL has no reload factory for an independent conditioned copy")
-    # Native cloning retains user patches/options while reopening the same
-    # local checkpoint for an independent static delegate. No model downloads.
-    prepared = model.clone(disable_dynamic=True, force_deepcopy=True) if clone else model
+    # Keep the incoming native offloading policy unless static was explicitly
+    # requested. Reopening the same local file isolates the original branch.
+    static = disable_dynamic or controls.get("offloading", "inherit") == "static"
+    prepared = model.clone(disable_dynamic=static, force_deepcopy=True) if clone else model
     root = prepared.model.diffusion_model
-    root.__class__ = RavenCausalMiniMaxH3Model
+    root.__class__ = MosaiChunkStreamingMiniMaxH3Model
     root.adaln_t_table = converted["adaln_t_table"]
     for index, block in enumerate(root.blocks):
         block.__class__ = RavenCausalDiTBlock
@@ -43,6 +44,7 @@ def prepare_model(model, conditioning_path, adapter_path, controls, *, clone=Tru
     prepared.model.raven_lora_attachment = attachment
     prepared.model.raven_lora_manifest = manifest
     prepared.model_options["mosaichunk_controls"] = dict(controls)
+    prepared.model_options["mosaichunk_dynamic_ready"] = bool(prepared.is_dynamic())
     # Cloning measured the base before new residuals were attached. Quantized
     # state_dict now includes those factors, so this accounts for every byte.
     prepared.size = comfy.model_management.module_size(prepared.model)
@@ -51,7 +53,8 @@ def prepare_model(model, conditioning_path, adapter_path, controls, *, clone=Tru
 
 
 def rebuild_model(factory, conditioning_path, adapter_path, controls, disable_dynamic=False):
-    model = factory[0](*factory[1], disable_dynamic=True)
+    static = disable_dynamic or controls.get("offloading", "inherit") == "static"
+    model = factory[0](*factory[1], disable_dynamic=static)
     if len(factory) > 2:
         model = model[factory[2]]
-    return prepare_model(model, conditioning_path, adapter_path, controls, clone=False)
+    return prepare_model(model, conditioning_path, adapter_path, controls, clone=False, disable_dynamic=static)

@@ -2,7 +2,7 @@
 
 **Experimental local ComfyUI port of MosaiChunk's T2V memory router. Full-size video generation and quality are not yet validated by this repository.**
 
-**Existing pruned/INT8 FL2VA checkpoint:** use the **MosaiChunk H3 Conditioning** node (MODEL input and output) and the compact converted conditioning described in [PRUNED.md](PRUNED.md). This path keeps your existing generator and does not require downloading the full BF16 checkpoint. The full-model instructions below describe the separate original loader.
+**Existing pruned/INT8 FL2VA checkpoint:** use the **MosaiChunk H3 Conditioning** node (MODEL input and output) with `offloading=inherit` and the compact converted conditioning described in [PRUNED.md](PRUNED.md). This path keeps your existing generator and does not require downloading the full BF16 checkpoint. Use its output with **MosaiChunk H3 Streaming Sampler**; normal KSampler/SamplerCustomAdvanced cannot run the memory retrieval. The full-model instructions below describe the separate original loader.
 
 MosaiChunk retrieves details from earlier chunks when an object or scene returns. Older attention keys/values stay in system RAM. Only selected history for one transformer layer is brought onto the GPU at a time. Memory lasts for one sampler execution; it is released afterward.
 

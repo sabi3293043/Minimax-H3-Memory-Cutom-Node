@@ -1589,6 +1589,15 @@ class RavenCausalMiniMaxH3Model(MiniMaxH3Model):
 # --- construction / validation helpers --------------------------------------
 
 
+class MosaiChunkStreamingMiniMaxH3Model(RavenCausalMiniMaxH3Model):
+    def forward(self, *args, **kwargs):
+        raise CausalModelError(
+            "MosaiChunk H3 Conditioning requires MosaiChunk H3 Streaming Sampler. "
+            "KSampler/SamplerCustomAdvanced do not run historical KV retrieval. "
+            "Use the streaming sampler, or bypass the conditioning node for ordinary sampling."
+        )
+
+
 def _assert_same_parameters(official: nn.Module, causal: nn.Module, index: int) -> None:
     """Fail loudly when the causal block is not state-dict identical."""
     official_shapes = {k: tuple(v.shape) for k, v in official.state_dict().items()}
