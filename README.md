@@ -33,6 +33,19 @@ The script uses `huggingface_hub`, already present in many ComfyUI environments.
 | `minimax_h3_raven_streaming_lora_4nfe_preview.safetensors` | `models/loras/` | 5.06 GB |
 | MosaiChunk T2V `model.safetensors` and `config.json` | `models/mosaichunk/t2v/` | 54.6 MB |
 
+### Singularity REF2VA pruned setup (two different files)
+
+For the **Singularity REF2VA Pruned v1.3 INT8** workflow, obtain **both** of the following. They have different roles; the conditioning file does not replace the diffusion checkpoint.
+
+| Required file | Purpose | Install to |
+|---|---|---|
+| [Singularity REF2VA Pruned v1.3 INT8](https://huggingface.co/WarmBloodAban/Minimax-h3_Singularity/blob/main/Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors) (`Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors`) | Main diffusion model / pruned H3 checkpoint | `ComfyUI/models/diffusion_models/` |
+| [Published MosaiChunk H3 Conditioning](https://huggingface.co/sabi123456/MosaiChunk-H3-Conditioning) (`raven-fl2va-conditioning.safetensors`) | Converted RAVEN conditioning data consumed by the MosaiChunk controller | `ComfyUI/models/mosaichunk/` |
+
+These are **separate from** the RAVEN LoRA adapter and MosaiChunk router listed above, which are also required for active RAVEN/MosaiChunk memory. The original FL2VA pruned baseline used by `conditioning_base_unet` may also be required for the controller's modulation transfer; the Singularity REF2VA checkpoint is not that baseline. See [PRUNED.md](PRUNED.md) for details.
+
+**Experimental compatibility:** REF2VA image/reference conditioning and the transfer of the RAVEN modulation update onto REF2VA are implemented experimentally. They have not yet been validated for trained video quality or identity preservation. No compatibility guarantee is implied by these download links.
+
 Also required, and reusable from an existing H3 setup:
 
 - [Qwen3-VL-32B MiniMax NVFP4 AWQ text encoder](https://huggingface.co/Comfy-Org/MiniMax-H3/tree/main/text_encoders), in `models/text_encoders/`.
