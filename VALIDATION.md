@@ -61,3 +61,8 @@ CPU integration exercised the real installed CFGGuider.sample wrapper path with 
 The inherited CPU regression selection plus package tests passed 389 tests with one warning. The new status extension passed syntax and mocked event/widget checks; browser rendering remains untested. Standard-sampler workflow files are provided separately so existing user workflows are preserved. No trained GPU generation or speed/fan/peak-VRAM measurement was run for this revision; the user performs that test.
 
 The prepared dynamic causal lane also propagates the native `prefetch_dynamic_vbars` switch normally supplied by BaseModel._apply_model. An additional CPU test verifies this switch reaches the block queue options without mutating incoming model options. Actual AIMDO GPU transfers remain unmeasured.
+
+
+## Subgraph status display revision
+
+A live reference-mode job used execution ID `105:1568`; its log explicitly reported memory inactive, but the frontend searched only the root graph for that compound ID. The status extension now resolves each subgraph instance in the execution path from app.rootGraph, including when the canvas is displaying a nested graph. `node web/tests/run_memory_status_checks.mjs` passes top-level, nested, duplicate-local-ID, invalid-path and root-fallback checks; JavaScript syntax checks pass. No browser-control tool was available to verify the live canvas. Sampling behavior is unchanged, and no running generation was interrupted. Reference and first/last-frame memory remain unimplemented.
