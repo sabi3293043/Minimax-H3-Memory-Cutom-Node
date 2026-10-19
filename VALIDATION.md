@@ -1,5 +1,136 @@
 # Validation status
 
+## Observation speed defaults
+
+New nodes now default to `observation_schedule=adaptive`,
+`progressive_resolution=true` and `store_observation_images=false`. Existing
+workflow values remain explicit and are not overwritten. Historical references
+below to fixed/full/image-storage defaults describe earlier revisions. The
+default change does not establish a full-model speedup or optimal quality.
+
+## Adaptive/progressive observation and descriptor-only memory
+
+- **462 selected CPU tests passed, two warnings.** New contracts cover spatial-
+  only resizing, preserved input/time/dtype, bounded fingerprints, warmup,
+  accumulated drift, per-frame change detection, forced refreshes, resolution
+  transitions, cross-scale index eviction and unchanged fixed scheduling.
+- Integration tests show three progressively increasing decoder input sizes,
+  retrieval rebuilding, fewer decodes on stable predictions, all sampler
+  callbacks preserved, unchanged source latents and cleanup. Disabling image
+  storage calls neither the image encoder nor the disk-cache constructor and
+  retains exactly the same frame-pair plans in a controlled test.
+- The actual native H3/CFGGuider/Euler CPU probe with random tiny weights and
+  installed Tiny VAE weights passes again. Image-storage on/off yields bit-exact
+  guided outputs. Adaptive/progressive zero-strength output is bit-exact to the
+  native baseline; enabled manual correction still produces finite changes.
+  This does not establish trained automatic retrieval quality at reduced sizes.
+- One warmed CPU observation-only timing run, with two Torch threads, 20
+  callbacks, seven latent frames and 192x128 full-size observations, measured
+  fixed/full at **12.82 s / 16 observations** and adaptive/progressive at
+  **4.96 s / 10 observations**. Both used actual installed Tiny VAE weights and
+  image storage off. This isolates observation overhead on a constant predicted
+  clip, not end-to-end generation, GPU speed or quality; it is not a promised
+  percentage speedup.
+
+The new scheduling/resolution options remain off by default. Smaller decoder
+inputs are approximate; cross-scale retrieval references rebuild, which can
+temporarily reduce guidance. Full-model GPU performance, trained video quality
+and temporal Tiny VAE weights at reduced spatial sizes remain to be tested.
+
+## Automatic frame-pair budget revision
+
+- **448 selected CPU tests passed, two warnings.** Regression cases show that
+  reverse-direction matches, matches within one latent frame and anchor/target
+  conflicts no longer crowd valid pairs out of the automatic guidance budget.
+  Generic read-only retrieval remains bidirectional unless forward selection
+  is requested. Targets are deduplicated by their native latent-frame positions.
+- A synthetic observer integration exercises both 2D and temporal Tiny VAE
+  layouts, real indexing/retrieval and GuidanceSession plans. Both retain valid
+  earlier-to-later pairs, protect source anchors, publish proposal counters and
+  remove their temporary images.
+- Existing real native CPU integration still passes manual guidance, zero-
+  strength parity, conditioning modes, Spectrum wrapper composition and cleanup.
+  Its short four-step automatic run with actual Tiny VAE weights accepts zero
+  proposals. That is reported as zero guidance, not a quality improvement.
+  A separate controlled-observation case through the same real native guider
+  produced two automatic proposals and two attention corrections affecting six
+  rows. Its preview frames and relaxed feature thresholds are synthetic, so it
+  establishes routing into attention rather than automatic identity recognition.
+  Trained automatic-guidance quality and throughput remain unestablished.
+
+The image cache limits, matching thresholds and user-selected defaults are
+unchanged. This fixes candidate selection order; it does not relax identity
+matching or add a learned tracker.
+
+## Automatic default preset
+
+New nodes now default to experimental `retrieved_frames` at strength 0.10 and
+`min_progress=0.25`, as requested by the user. Existing explicit workflow values
+are preserved. References below to observation-only defaults describe earlier
+revisions. This default change does not establish that automatic retrieval is
+better than manual guidance or that the settings are optimal.
+
+## Native observation reliability revision (2026-10-19)
+
+- **443 selected CPU tests passed, two warnings.** New lifecycle tests verify
+  cadence reduces decoder calls without dropping sampler callbacks; a synthetic
+  CUDA OOM disables retries and clears stale guidance; observation-only budget
+  refusal preserves native generation; BaseException cancellation releases
+  image files; and active correction skips the final unused observation.
+- The actual native H3/CFGGuider/Euler/Tiny VAE CPU probe passed again in all
+  four conditioning cases below. Zero-strength native parity and cancellation
+  cleanup remain intact. Spectrum still uses actual evaluations when guided.
+- The installed KJ `get_sage_func('auto')` calling adapter and **real Sage CUDA
+  kernel** passed a small synthetic attention/correction test in FP16 and BF16
+  on RTX 4090. Each corrected 16 target rows, preserved source/non-target rows
+  and input tensors, and returned finite outputs within a rounding-tolerant
+  residual bound. This did not load H3, exercise full-model offloading or
+  establish video quality/performance. Only Sage `auto` was checked on CUDA.
+- Preview protocol tests passed 32/32 and preview controller tests 29/29. The
+  status routing checks pass for native and RAVEN nodes, separate event channels
+  and subgraph instances. These use mocked frontend objects; browser rendering
+  of the new status widget is not claimed.
+- The user's successful trained-model video used `observe_only`. Its consistency
+  is therefore a native-model result, **not evidence of guidance improvement**.
+  A fixed-seed comparison with Spectrum bypassed in both runs remains required.
+
+Observation timing measures decode, indexing and image storage. Peak cache bytes
+measure encoded image records; neither metric measures total model RAM/VRAM.
+
+## Native Tiny VAE correction prototype (2026-10-19)
+
+The Native Visual Observer now has opt-in appearance guidance. The legacy RAVEN
+backend below is separate and has not been rewritten. The default remains
+observation only; this prototype is not trained MosaiChunk retrieval.
+
+- **437 tests passed, two warnings** in the selected inherited CPU regressions
+  plus all packaged tests. New tests exercise target-row-only residuals, the
+  residual bound, rejection of weak matches, zero-strength passthrough, temporal
+  frame mapping, anchor protection, options restoration, existing block/Sage
+  composition and independent Spectrum configuration.
+- A CPU integration probe used the actual installed CFGGuider, Euler sampler,
+  H3 blocks, ModelPatcher and Tiny VAE checkpoint with a tiny randomly weighted
+  H3. Text, first-frame, first/last-frame and reference conditioning produced
+  finite predictions; enabled corrections changed predictions in each case.
+  Matching thresholds were relaxed for this synthetic wiring test, so it does
+  not establish that the production thresholds find useful identities.
+- A zero-strength observer produced bit-exact native baseline results. The
+  original MODEL options were preserved, callbacks forwarded, cancellation
+  propagated and temporary image directories removed.
+- Actual installed Spectrum wrappers ran with forced actual evaluations and
+  disabled forecasting/replay. The installed KJ Sage adapter ran against a CPU
+  SDPA substitute kernel, validating its calling/layout interface only.
+- No trained GPU generation, actual CUDA Sage kernel, live preview rendering,
+  peak full-model memory, throughput or video-quality result is claimed.
+  Spectrum's forecasting speedup is deliberately unavailable with active
+  correction. Source-frame guidance is from current generated-video features,
+  not an external-reference K/V branch or persistent historical feature bank.
+
+For an initial trained-model A/B test, follow the manual-frame instructions in
+README.md and compare the same seed with zero and nonzero strength. Check the
+actual correction counters and the rendered video; observation counts alone
+are not evidence of effective guidance.
+
 ## KJ preview compatibility correction
 
 The controller now runs downstream KJ Model Preview Override wrappers around the chunk loop using ComfyUI's native WrapperExecutor. Upstream preview wrappers already surround the controller and are not run twice. Only the inspected callback-only preview class is accepted; an unrelated function registered under the same key still fails validation. Unknown sampling hooks retain the explicit rejection, now identifying their keys.

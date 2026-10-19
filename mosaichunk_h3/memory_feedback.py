@@ -29,12 +29,18 @@ def retrieve_step_references(
     min_temporal_gap: int = 2,
     max_distance: float = 0.075,
     min_confidence: float = 0.50,
+    forward_only: bool = False,
+    frame_groups=None,
 ):
     """Rank cross-frame references retained from earlier denoising steps.
 
     Inputs are compact CPU [T,D] descriptors and StoredObservation entries.
     This is a retrieval/proposal boundary, NOT a correction signal.
     Rejects sources from the same/future step and nearby identical frames.
+    Guidance callers use forward_only and decoded-frame-to-latent groups to
+    filter unusable pairs BEFORE budgeting. Forward selection also keeps
+    source anchors out of the selected target set. Diagnostic callers retain
+    the original bidirectional behavior by default.
     """
     import torch
 
@@ -47,18 +53,27 @@ def retrieve_step_references(
     if max_references == 0 or descriptors.shape[0] == 0:
         return []
     queries = descriptors.detach().float().cpu()
+    groups = tuple(range(len(queries))) if frame_groups is None else tuple(frame_groups)
+    if (len(groups) != len(queries) or any(not isinstance(group, int) or group < 0 for group in groups)
+            or any(a > b for a, b in zip(groups, groups[1:]))):
+        raise ValueError('frame_groups must be one nonnegative ordered latent index per decoded frame')
     refs = [item for item in observations
             if item.step < step and item.confidence >= min_confidence]
     if not refs:
         return []
     if any(item.descriptor.shape != queries.shape[1:] for item in refs):
         raise ValueError("reference descriptor dimensions do not match query")
+    if any(not 0 <= item.frame < len(groups) for item in refs):
+        raise ValueError('reference frame is outside the current decoded video')
     pool = torch.stack([item.descriptor.detach().float().cpu() for item in refs], 0)
     distances = (queries[:, None, :] - pool[None, :, :]).abs().mean(dim=2)
     proposals = []
     for query_frame in range(queries.shape[0]):
         for j, item in enumerate(refs):
             if abs(query_frame - item.frame) < min_temporal_gap:
+                continue
+            source, target = groups[item.frame], groups[query_frame]
+            if source == target or (forward_only and source >= target):
                 continue
             distance = float(distances[query_frame, j])
             if distance <= max_distance:
@@ -70,11 +85,16 @@ def retrieve_step_references(
     proposals.sort(key=lambda r: (r.distance - 0.025 * r.confidence, r.query_frame))
     chosen = []
     seen = set()
+    anchors = set()
     for proposal in proposals:
-        if proposal.query_frame in seen:
+        source, target = groups[proposal.source_frame], groups[proposal.query_frame]
+        if target in seen:
+            continue
+        if forward_only and (target in anchors or source in seen):
             continue
         chosen.append(proposal)
-        seen.add(proposal.query_frame)
+        seen.add(target)
+        anchors.add(source)
         if len(chosen) == max_references:
             break
     return chosen

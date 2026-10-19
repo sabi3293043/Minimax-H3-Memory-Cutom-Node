@@ -88,6 +88,19 @@ Current scope: text-to-video-and-audio plus experimental first/last-frame and re
 
 ## Native H3 visual observer (experimental)
 
+**Optional generation acceleration:** the same node now has
+`generation_acceleration=sol`, `selective_cache`, or `sol_and_cache`.
+Start with **Sol**, then compare the combined mode. Memory layers remain real
+and dense; caching never skips them. Existing workflows default to `off`.
+No new model download or Turbo LoRA is required. These are experimental
+approximations with no measured full-model speedup in this repository yet.
+See [GENERATION_ACCELERATION.md](GENERATION_ACCELERATION.md) for settings,
+compatibility, memory limits and the comparison procedure.
+VRAM-constrained setups can now choose bounded `cache_storage=ram` (or `auto`)
+with small GPU transfers. Optional `adaptive_sol` varies sparsity using prediction
+drift and final-detail protection. Both preserve the previous defaults; see the
+same guide for the staged test procedure and limitations.
+
 For **normal full-video MiniMax H3 sampling**, the separately registered
 **MosaiChunk H3 Native Visual Observer (experimental)** MODEL-to-MODEL node
 allows a visual-memory capture experiment without invoking RAVEN's
@@ -105,8 +118,12 @@ Alternative: [Kijai MiniMax-H3-TAE](https://huggingface.co/Kijai/MiniMax-H3-TAE)
 The observer uses selected decoded frames and a bounded temporary disk
 cache that deletes its contents on completion/interruption/error. Selection
 currently uses simple RGB thumbnail novelty and successive denoising-step
-stability heuristics, *not* the trained MosaiChunk RAVEN router. It does
-**not** provide correction or validated improvement in video consistency.
+stability heuristics, *not* the trained MosaiChunk RAVEN router. New nodes default
+to experimental `guidance_mode=retrieved_frames` at strength `0.10` and begin
+observing at `min_progress=0.25`. This requires CFG 1 and disables Spectrum
+forecasting during guided execution. Select `observe_only` (or zero strength)
+to record observations without modifying predictions. Existing saved workflows
+retain their explicit settings.
 It decodes separately from KJ Model Preview Override and can slow sampling,
 particularly because temporal TAEH3 must process the full sequence to examine
 late video frames. This work remains experimental.
@@ -114,7 +131,148 @@ late video frames. This work remains experimental.
 A new read-only cross-step retrieval interface can inspect references from
 earlier denoising predictions and read their temporarily cached images. It
 does **not** inject those images into H3 or alter subsequent predictions.
-The next milestone is a validated model-conditioning or guidance mechanism.
+An opt-in experimental correction path is now available; visual consistency
+improvements have not been established on a trained H3 generation.
+
+### Experimental Tiny VAE appearance correction
+
+The automatic starting preset retains `max_frames=4`, `max_memory_frames=24`,
+`guidance_layers=8,16,24`, `guidance_similarity=0.85`, `max_anchor_tokens=128`,
+`observation_interval=1`, `max_observation_megapixels=64` and `disk_gib=2`.
+These are conservative exploratory defaults, not a measured optimal preset.
+Earlier observation gives cross-step retrieval more opportunities to find stable
+references; it also performs more decoding than the old 50% start. Manual source
+and target controls are ignored in retrieved mode. Short runs and large visual
+changes may yield no confident matches and therefore zero corrections.
+
+Use this **same Native Visual Observer node**, with the existing native H3
+sampler and your own pruned INT8 generator/LoRAs. The RAVEN conditioning file,
+RAVEN adapter and MosaiChunk router belong to the separate chunk backend;
+they are not required by this native correction path. Do not chain the two
+controllers together.
+
+For an initial controlled A/B test, use `guidance_mode=manual_frames`,
+`guidance_source_frame=0`, and a comma-separated list of reappearance frames
+in `guidance_target_frames` (for example `68,85` in a 90-frame video).
+Set `guidance_strength=0.10`, `guidance_layers=8,16,24`, CFG 1,
+and `min_progress=0.25`. These layer/strength choices are exploratory, not a
+validated quality preset. Set strength to zero for the baseline.
+Bypass Spectrum for **both** comparison runs: active correction disables its
+forecasting, whereas zero strength otherwise preserves it. Keep the seed,
+sampler, schedule, conditioning, LoRAs and all other settings fixed. See
+[the controlled test guide](NATIVE_GUIDANCE_TEST.md) for a prompt and settings.
+
+Manual frame indices always refer to the **final video**, starting at zero.
+The controller converts them to H3 latent positions. Internally it also
+distinguishes temporal Tiny VAEs from 2D tiny decoders when mapping the
+automatically retrieved observations; their frame indices are not equivalent.
+
+After observing a prediction, the next native model evaluation can reinforce
+selected target-video attention rows using current-evaluation K/V from the
+selected source frame. Content matching uses unrotated value features,
+similarity/uniqueness and mutual-match checks. The added residual is bounded;
+source, text, conditioning and audio rows are not directly edited. Audio can
+still change later through H3's joint video/audio computation. No previous
+step's K/V is reused, and no all-layer history bank is retained.
+
+`retrieved_frames` instead uses earlier Tiny VAE observations to propose
+frame pairs. This is especially experimental: thumbnail matching is not
+identity recognition, and a short four-step run may provide too little
+stable observation history to produce any corrections. A log reports actual
+attention corrections, not just recorded images. Neither mode guarantees
+correct identity or occlusion handling; blending can bias poses or motion.
+
+Automatic guidance filters proposals **before** spending its frame-pair budget:
+the source must precede the target, both must map to different H3 latent frames,
+and selected source anchors cannot also be targets. Repeated decoded frames
+within one latent position count as one target. This avoids wasting the budget
+on pairs the attention controller would discard later; it does not establish
+semantic identity. Status reports frame-pair proposals separately from actual
+attention corrections, so a zero-correction run can be diagnosed more clearly.
+
+The existing Sage attention override is composed with the additional attention
+branch. Spectrum, when present, is explicitly configured for **actual model
+evaluations** for this execution; forecasting, offline replay and model-aware
+correction are disabled because they can bypass or invalidate the new guidance.
+Its speed benefit is therefore not retained during this prototype. Source
+MODEL settings and subsequent unguided runs are preserved.
+
+Full Tiny VAE decoding remains separate from KJ Preview and can be expensive.
+The node checks `max_observation_megapixels` before observation (default
+64 MP across the decoded clip); this is an observation-buffer guard, not a
+total process RAM/VRAM limit. If over budget, active guidance stops with an
+explicit error; observation-only generation continues with capture disabled.
+Start with 512x320 / 90 frames. Temporary image
+files are removed after success, failure or cancellation. Real trained-model
+quality, offloading performance and GPU interoperability still require testing.
+
+The node's live `memory_status` distinguishes **observation only / guidance
+inactive** from enabled guidance and reports actual correction calls. It also
+reports cumulative observation time and peak encoded-image cache bytes, which
+are not total generation time or process RAM/VRAM. The console has the same
+start/end notices when running without a browser. A stopped run reports its
+error; normal completion reports whether cache removal succeeded or was deferred.
+
+`observation_interval=1` preserves the original observation frequency. A value
+of `2` or `3` reduces Tiny VAE decoding and indexing work, but provides fewer
+opportunities to select/update references. It does not change sampler callbacks
+or denoising steps. Active guidance skips observations too late to influence
+another evaluation. An observation CUDA OOM or disk-memory limit clears the
+guidance plan and disables further capture for that run; sampler errors and
+cancellation still propagate. Full Tiny VAE decoding is still separate from KJ
+Preview; duplicate decode has not yet been eliminated.
+
+### Experimental observation speed controls
+
+New nodes default to adaptive observation, progressively larger previews and
+descriptor-only memory. Existing saved settings are preserved. The defaults are:
+
+| Control | Starting value |
+|---|---|
+| `observation_schedule` | `adaptive` |
+| `progressive_resolution` | `true` |
+| `observation_start_scale` | `0.50` |
+| `observation_full_progress` | `0.75` |
+| `adaptive_change_threshold` | `0.04` |
+| `adaptive_max_interval` | `3` |
+| `observation_interval` | `1` |
+| `min_progress` | `0.25` |
+| `store_observation_images` | `false` |
+
+Progressive mode spatially downsamples **only the Tiny VAE's observation
+latents**, before decoding. With those values it uses half-sized observations
+until 50% of the schedule, three-quarter size until 75%, then full size. These
+are per-dimension scales: half width/height has approximately a quarter of the
+pixels. Temporal length, sampler latents, model attention and final output
+resolution are unchanged. Spatial rounding and minimum sizes can merge stages
+for very small videos. Smaller previews are approximate and can lose details.
+
+Adaptive mode compares bounded thumbnails of the current latent prediction to
+the last observed prediction. Changes can request an earlier refresh, while
+`adaptive_max_interval` forces periodic refreshes. Each new observation size
+starts with three warmup observations to seed retrieval. This is a prediction-
+drift heuristic, not semantic object/occlusion detection; some changes can be
+missed. The threshold is exploratory and not a trained quality calibration.
+
+At a resolution change, the RGB retrieval index is rebuilt and stale frame-pair
+plans are cleared. Cross-resolution descriptors are not assumed comparable.
+Automatic guidance may pause while the new stage gathers observations. Short
+four-step schedules can have too little history; begin with your usual longer
+schedule and compare against fixed/full mode. The full-resolution pixel budget
+is still checked before sampling, even when early previews are smaller.
+
+Disabling image storage keeps bounded descriptors in RAM and avoids WebP
+encoding, image writes and cache-directory creation. It does **not** disable
+retrieval or guidance. Diagnostic hooks cannot read image files in this mode.
+Synthetic native sampling tests show bit-exact output when toggling storage
+alone; adaptive cadence and resolution can alter guidance and quality.
+
+Status reports skipped observations and the latest preview dimensions. The
+observation timer includes scheduling overhead. These options reduce observation
+work, not the number of H3 evaluations; Spectrum forecasting remains disabled
+with active guidance. End-to-end GPU speed and trained-video quality need A/B
+testing. Set `observation_schedule=fixed`, `progressive_resolution=false` and
+`store_observation_images=true` to return to the previous observation behavior.
 
 See [NATIVE_MEMORY_STATUS.md](NATIVE_MEMORY_STATUS.md) for milestones and
 remaining native memory-injection work.

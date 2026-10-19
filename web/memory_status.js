@@ -1,6 +1,11 @@
 import { app } from '../../scripts/app.js'
 import { api } from '../../scripts/api.js'
 
+const statusNodes = new Map([
+  ['mosaichunk.controller_status', 'MosaiChunkH3Conditioning'],
+  ['mosaichunk.native_status', 'MosaiChunkH3NativeVisualObserver'],
+])
+
 function executionNode(executionId) {
   if (executionId === null || executionId === undefined) return null
   const path = String(executionId).split(':')
@@ -31,7 +36,7 @@ function statusWidget(node) {
 app.registerExtension({
   name: 'MosaiChunk.H3.MemoryStatus',
   beforeRegisterNodeDef(nodeType, nodeData) {
-    if (nodeData.name !== 'MosaiChunkH3Conditioning') return
+    if (![...statusNodes.values()].includes(nodeData.name)) return
     const created = nodeType.prototype.onNodeCreated
     nodeType.prototype.onNodeCreated = function (...args) {
       const result = created?.apply(this, args)
@@ -40,11 +45,13 @@ app.registerExtension({
     }
   },
   setup() {
-    api.addEventListener('mosaichunk.controller_status', event => {
-      const node = executionNode(event.detail?.node)
-      if (!node || node.comfyClass !== 'MosaiChunkH3Conditioning') return
-      statusWidget(node).value = String(event.detail.message)
-      node.setDirtyCanvas(true, true)
-    })
+    for (const [eventName, className] of statusNodes) {
+      api.addEventListener(eventName, event => {
+        const node = executionNode(event.detail?.node)
+        if (!node || node.comfyClass !== className) return
+        statusWidget(node).value = String(event.detail.message)
+        node.setDirtyCanvas(true, true)
+      })
+    }
   },
 })

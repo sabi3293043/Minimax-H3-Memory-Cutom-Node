@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -19,6 +19,32 @@ class FakeDecoder:
         ])
 
 class NativeObserverTests(unittest.TestCase):
+    def test_active_observation_budget_fails_before_sampling(self):
+        from mosaichunk_h3.native_guidance import GuidanceConfig, GuidanceSession
+        shape = [1, 24, 3, 64, 64]
+        session = GuidanceSession(GuidanceConfig(mode='manual_frames', layers='0',
+            target_frames='5'), shape)
+        observer = NativeVisualObserver(tiny_vae_name='auto', max_frames=2,
+            min_progress=0, disk_gib=.1, max_observation_megapixels=1.)
+        executor = Mock()
+        with patch('mosaichunk_h3.native_visual_observer._load_tae_decoder',
+                   return_value=FakeDecoder()):
+            with self.assertRaisesRegex(ValueError, 'max_observation_megapixels'):
+                observer._sample(executor, None, None, None, None,
+                    latent_shapes=[shape, [1, 32, 2]], guidance=session)
+            executor.assert_not_called()
+
+    def test_observation_rng_is_preserved_and_budget_is_finite(self):
+        from mosaichunk_h3.native_visual_observer import preserve_observation_rng
+        state = torch.random.get_rng_state()
+        with preserve_observation_rng():
+            torch.rand(20)
+        self.assertTrue(torch.equal(state, torch.random.get_rng_state()))
+        for budget in [0., -1., float('nan'), float('inf')]:
+            with self.assertRaises(ValueError):
+                NativeVisualObserver(tiny_vae_name='auto', max_frames=2,
+                    min_progress=0, disk_gib=.1, max_observation_megapixels=budget)
+
     def test_content_driven_frame_selection(self):
         images = torch.zeros(5, 3, 12, 12)
         images[1, :, :6] = 1

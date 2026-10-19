@@ -2,12 +2,12 @@ import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 import assert from 'node:assert/strict'
 
-let extension, listener
+let extension
+const listeners = new Map()
 const graph = entries => ({ getNodeById: id => entries[String(id)] ?? null })
 const app = { registerExtension: value => { extension = value } }
 const api = { addEventListener: (name, fn) => {
-  assert.equal(name, 'mosaichunk.controller_status')
-  listener = fn
+  listeners.set(name, fn)
 } }
 let originalCalls = 0
 function Node() { this.widgets = []; this.comfyClass = 'MosaiChunkH3Conditioning' }
@@ -33,7 +33,9 @@ app.rootGraph = graph({
 })
 app.graph = graph({ 1568: other }) // Canvas is displaying another graph.
 extension.setup()
-function send(node, message) { listener({ detail: { node, message } }) }
+function send(node, message, eventName = 'mosaichunk.controller_status') {
+  listeners.get(eventName)({ detail: { node, message } })
+}
 send('105:1568', 'Memory inactive (reference)')
 assert.equal(nested.widgets[0].value, 'Memory inactive (reference)')
 assert.equal(top.widgets[0].value, 'Waiting for sampler')
@@ -51,4 +53,22 @@ assert.equal(nested.dirty, true)
 delete app.rootGraph
 send('1568', 'Legacy root graph fallback')
 assert.equal(other.widgets[0].value, 'Legacy root graph fallback')
-console.log('Memory status checks passed: top-level, subgraph instance paths, nested graphs, duplicate local IDs, invalid paths, root fallback.')
+
+function NativeNode() { Node.call(this); this.comfyClass = 'MosaiChunkH3NativeVisualObserver' }
+NativeNode.prototype = Object.create(Node.prototype)
+NativeNode.prototype.onNodeCreated = function () { return 9 }
+extension.beforeRegisterNodeDef(NativeNode, { name: 'MosaiChunkH3NativeVisualObserver' })
+const native = new NativeNode()
+assert.equal(native.onNodeCreated(), 9)
+app.rootGraph = graph({ 10: { subgraph: graph({ 20: native }) }, 1568: top })
+send('10:20', 'Observation only; guidance inactive', 'mosaichunk.native_status')
+assert.equal(native.widgets[0].value, 'Observation only; guidance inactive')
+send('10:20', 'wrong controller event')
+assert.equal(native.widgets[0].value, 'Observation only; guidance inactive')
+send('1568', 'wrong native event', 'mosaichunk.native_status')
+assert.equal(top.widgets[0].value, 'Memory complete')
+send('10:20', 'Complete: 12 corrections; cache removed', 'mosaichunk.native_status')
+assert.equal(native.widgets[0].value, 'Complete: 12 corrections; cache removed')
+assert.equal(native.widgets.length, 1)
+assert.equal(native.widgets[0].options.serialize, false)
+console.log('Memory status checks passed: both node types, isolated event channels, subgraph instances, invalid paths and root fallback.')

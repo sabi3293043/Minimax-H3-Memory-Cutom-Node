@@ -55,6 +55,13 @@ class AdaptiveVisualIndex:
                 parts.append(thumb.flatten(1).clamp(0, 1).to(device="cpu"))
             return torch.cat(parts, dim=0)
 
+    def reset(self, *, on_evict):
+        """Do not compare RGB descriptors across different decoder resolutions."""
+        for entry in self.entries:
+            on_evict(entry.record)
+        self.entries.clear()
+        self._previous = self._previous_step = None
+
     def candidates(self, frames, *, step: int, descriptors=None):
         """Choose frame IDs by content changes and similarity, not intervals.
 
