@@ -136,10 +136,12 @@ improvements have not been established on a trained H3 generation.
 
 ### Experimental Tiny VAE appearance correction
 
-The automatic starting preset retains `max_frames=4`, `max_memory_frames=24`,
-`guidance_layers=8,16,24`, `guidance_similarity=0.85`, `max_anchor_tokens=128`,
+The consistency-first starting preset uses `max_frames=8`, `max_memory_frames=64`,
+`guidance_layers=8,16,24`, `guidance_similarity=0.85`, `max_anchor_tokens=256`,
 `observation_interval=1`, `max_observation_megapixels=64` and `disk_gib=2`.
-These are conservative exploratory defaults, not a measured optimal preset.
+Observations use `observation_schedule=fixed` and `progressive_resolution=false`,
+with `generation_acceleration=off`. These exploratory defaults favor observation
+coverage over speed; they are not a measured optimal preset or an outfit guarantee.
 Earlier observation gives cross-step retrieval more opportunities to find stable
 references; it also performs more decoding than the old 50% start. Manual source
 and target controls are ignored in retrieved mode. Short runs and large visual
@@ -224,13 +226,15 @@ Preview; duplicate decode has not yet been eliminated.
 
 ### Experimental observation speed controls
 
-New nodes default to adaptive observation, progressively larger previews and
-descriptor-only memory. Existing saved settings are preserved. The defaults are:
+New nodes default to fixed observation at full resolution and descriptor-only
+memory. Adaptive scheduling and progressive resolution remain optional speed
+controls. Existing saved settings are preserved; recreate the node or edit its
+widgets to adopt the new defaults. The defaults are:
 
 | Control | Starting value |
 |---|---|
-| `observation_schedule` | `adaptive` |
-| `progressive_resolution` | `true` |
+| `observation_schedule` | `fixed` |
+| `progressive_resolution` | `false` |
 | `observation_start_scale` | `0.50` |
 | `observation_full_progress` | `0.75` |
 | `adaptive_change_threshold` | `0.04` |
@@ -240,8 +244,8 @@ descriptor-only memory. Existing saved settings are preserved. The defaults are:
 | `store_observation_images` | `false` |
 
 Progressive mode spatially downsamples **only the Tiny VAE's observation
-latents**, before decoding. With those values it uses half-sized observations
-until 50% of the schedule, three-quarter size until 75%, then full size. These
+latents**, before decoding. When enabled, it uses half-sized observations until
+50% of the schedule, three-quarter size until 75%, then full size. These
 are per-dimension scales: half width/height has approximately a quarter of the
 pixels. Temporal length, sampler latents, model attention and final output
 resolution are unchanged. Spatial rounding and minimum sizes can merge stages
