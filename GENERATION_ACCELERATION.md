@@ -170,3 +170,25 @@ arithmetic equivalence, budget guards, cache invalidation, and cancellation.
 A small RTX 4090 kernel probe also checked pinned RAM replay in FP32/FP16/BF16
 and real Sol calls at changing tau. These tests do not establish trained-video
 quality or end-to-end acceleration for these new options.
+
+### Dynamic VRAM allocation compiler compatibility
+
+Conditional residual reuse is incompatible with the installed aimdo block
+allocation recording under `cudaMallocAsync`: native CUDA sampling can fail with
+`aimdo memory compile error` at a subsequent block boundary. Cache-enabled runs
+now use an execution-local DIFFUSION_MODEL wrapper to end allocation recording
+before H3's network body. Dynamic VRAM weight staging/prefetch and the native
+sampler remain active. No global compiler setting, launcher or ComfyUI core file
+is changed. Sol-only and cache-disabled runs retain ordinary compiler behavior.
+
+Status reports `allocation recording bypassed for N cache evaluations`. This
+compatibility choice trades allocation-recording optimization for functioning
+conditional caching; speed remains workload-dependent. Restart ComfyUI after
+updating, particularly after a compiler failure. Do not treat a failed recording
+as an ordinary OOM and retry inside the same evaluation.
+
+The compatibility change was checked on RTX 4090 with real aimdo recording and
+`cudaMallocAsync`, a small native H3 model, Tiny VAE decoding, and both Euler and
+RES multistep sampling. Cache hits and memory corrections completed; a subsequent
+cache-disabled run used ordinary compiler behavior again. Full-size trained H3
+generation still requires comparison in the user's workflow.

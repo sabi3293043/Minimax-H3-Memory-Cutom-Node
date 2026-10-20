@@ -153,6 +153,7 @@ class AccelerationSession:
         self.disabled_sections = set()
         self.sol_module = self.sol_patch = None
         self.closed = False
+        self.compiler_bypass_calls = 0
         self.adaptive = AdaptiveSol(config.sol_tau, config.sol_stable_boost,
                                     config.sol_drift_threshold, config.end)
         self.tau = self.tau_min = self.tau_max = config.sol_tau
@@ -409,6 +410,7 @@ class AccelerationSession:
                         if isinstance(s.residual, HostResidual)), cache_storage=self.config.cache_storage,
                     sol_tau=self.tau, sol_tau_min=self.tau_min, sol_tau_max=self.tau_max,
                     adaptive_sol_changes=self.tau_changes, adaptive_sol_state=self.adaptive.state,
+                    allocation_compiler_bypass_calls=self.compiler_bypass_calls,
                     invalidations=self.invalidations, reasons=sorted(self.reasons))
 
     def summary(self):
@@ -419,6 +421,8 @@ class AccelerationSession:
             text += f' GPU / {self.peak_ram_bytes / 1024**2:.1f} MiB RAM'
         if self.config.sol and self.config.adaptive_sol:
             text += f'; adaptive Sol tau {self.tau:.2f} ({self.adaptive.state})'
+        if self.compiler_bypass_calls:
+            text += f'; allocation recording bypassed for {self.compiler_bypass_calls} cache evaluations'
         if self.reasons:
             text += '; ' + '; '.join(sorted(self.reasons))
         elif self.config.sol and not self.sparse_calls:
@@ -459,6 +463,12 @@ def install_acceleration(guider, config, guidance=None):
     if guidance is not None and any(('double_block', index) in replacements for index in guidance.layers):
         raise ValueError('Existing block patch on a memory layer may bypass guidance; remove that block patch before acceleration')
     try:
+        if config.cache:
+            from .cache_compiler import CacheCompilerBoundary
+            groups = transformer.setdefault('wrappers', {})
+            previous = groups.get('diffusion_model', {})
+            groups['diffusion_model'] = {
+                'mosaichunk_cache_allocation_boundary': [CacheCompilerBoundary(session)], **previous}
         if config.sol:
             try:
                 module = importlib.import_module('comfy_extras.nodes_sparse_attention')
