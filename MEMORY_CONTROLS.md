@@ -128,9 +128,31 @@ settings. Tracking remains default-off and needs no packages while disabled.
 More threads are not universally faster; benchmark a few limits on your CPU.
 Status and optional reports now separate tracking time from total observation
 time, and include the effective thread count and last refresh timings.
-It uses a maximum of 16 sampled observation frames and four
-selected regions per refresh. CPU tracking can be substantially slower and use
-additional system RAM. Sparse preview frames can miss a short occlusion.
+`occlusion_frame_selection=retrieved` selects frames from the **same current
+decoded RGB observation** used by appearance memory and compatible previews.
+It prioritizes current source/target indices selected by memory guidance, adds
+intermediate frames and reserves coverage near the clip's end. Before retrieval
+has usable matches, it spreads coverage across the observation. This does not
+read stored old-step images, capture a second video or request another VAE decode.
+The stored memory descriptors still identify candidates; masks always come from
+the current step and resolution. No VAE weights or final output settings change.
+
+`occlusion_frame_budget=8` is the starting budget (4–16). Protected sources are
+always retained and may raise it. Missing/hidden or low-confidence masks request
+broader coverage, up to 16 frames, on the **next fresh observation**. There is
+only one segmentation pass per observation. Uncertain targets receive no
+regional correction now; whole-frame memory continues. Only a coverage flag
+survives between observations: unselected frames never borrow interpolated or
+old-step masks/RGB. Broad coverage continues while uncertainty persists. This
+is a speed/coverage trade-off, not a guarantee of unchanged tracking quality or
+whole-video speedup.
+
+Use `uniform` with a budget of `16` for broad fixed coverage without a second
+adaptive pass. At most four selected regions are tracked. CPU tracking can be
+substantially slower and use additional system RAM. Sparse frames can miss a
+short occlusion. Appearance-memory observation/capture budgets are unchanged.
+Optional report `tracking.last_refresh` includes selected indices, step/size,
+retrieved-pair coverage, expansion, processed/encoded frames and worker timings.
 Untracked or hidden targets receive no regional guidance; whole-frame matching
 continues. No detections, installation/startup failure or a failed refresh
 falls back to whole-frame guidance with an explicit notice. Old masks are not

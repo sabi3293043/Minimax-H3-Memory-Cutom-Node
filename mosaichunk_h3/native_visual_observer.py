@@ -482,7 +482,10 @@ class NativeVisualObserver:
                                         tracking_started = time.perf_counter()
                                         try:
                                             tracked = tracker.track(frames,configured_regions,
-                                                sources or mapped_protected or (0,))
+                                                sources or mapped_protected or (0,),
+                                                frame_pairs=tuple((p.source_frame,p.target_frame) for p in global_plans),
+                                                frame_budget=self.memory_options.tracking_frame_budget,
+                                                selection=self.memory_options.tracking_selection,step=step)
                                             memory.regions = tracker.regions
                                             tracking_reason = tracker.last_reason
                                             tracking_event = dict(region='tracking',reason=tracking_reason)
@@ -734,6 +737,10 @@ class MosaiChunkH3NativeVisualObserver:
             "memory_preview_frames": ("INT", {"default": 16,"min": 1,"max": 64,"step": 1}),
             "memory_preview_resolution": ("INT", {"default": 512,"min": 64,"max": 1024,"step": 64}),
             "memory_preview_fps": ("FLOAT", {"default": 8.,"min": 1.,"max": 30.,"step": 1.}),
+            "occlusion_frame_selection": (["retrieved","uniform"], {"default": "retrieved",
+                "tooltip": "Retrieved: track current decoded frames selected around memory source/target matches, with intermediate/discovery frames. Uncertain visibility/confidence widens the NEXT fresh observation to at most 16, without repeating segmentation or reusing old masks. No matches: spread coverage. Uniform: fixed spread coverage. No extra VAE decode; sparse tracking can miss brief occlusions."}),
+            "occlusion_frame_budget": ("INT", {"default": 8,"min": 4,"max": 16,"step": 1,
+                "tooltip": "Starting number of shared observation frames for optional CPU tracking. Protected sources are always included and may raise this budget. Retrieved mode can widen the next observation to 16 after uncertainty. One tracking pass per observation. Whole-frame memory observations are unchanged. Uniform + 16 provides broad fixed tracking coverage."}),
         }, "hidden": {"unique_id": "UNIQUE_ID"}}
 
     def apply(self, model, tiny_vae_name, max_frames=8, min_progress=0.25,
@@ -751,7 +758,8 @@ class MosaiChunkH3NativeVisualObserver:
               memory_preset='Consistency', memory_regions='[]', protected_frames='',
               confidence_guidance=False, memory_inspector=True, export_memory_report=False,
               occlusion_aware_matching=False, occlusion_cpu_threads=0,share_tiny_vae_frames=True,
-              memory_preview='auto',memory_preview_frames=16,memory_preview_resolution=512,memory_preview_fps=8.):
+              memory_preview='auto',memory_preview_frames=16,memory_preview_resolution=512,memory_preview_fps=8.,
+              occlusion_frame_selection='retrieved',occlusion_frame_budget=8):
         from comfy.patcher_extension import WrappersMP
         from .native_guidance import GuidanceConfig
         from .generation_acceleration import AccelerationConfig
@@ -761,7 +769,8 @@ class MosaiChunkH3NativeVisualObserver:
             occlusion=bool(occlusion_aware_matching),preset=memory_preset,
             cpu_threads=occlusion_cpu_threads,share_frames=bool(share_tiny_vae_frames),
             preview=memory_preview,preview_frames=memory_preview_frames,
-            preview_resolution=memory_preview_resolution,preview_fps=memory_preview_fps).validate()
+            preview_resolution=memory_preview_resolution,preview_fps=memory_preview_fps,
+            tracking_selection=occlusion_frame_selection,tracking_frame_budget=occlusion_frame_budget).validate()
         acceleration = AccelerationConfig(mode=generation_acceleration, sol_tau=float(sol_tau),
             start=float(acceleration_start), end=float(acceleration_end),
             cache_threshold=float(cache_threshold), cache_max_reuse=int(cache_max_reuse),

@@ -137,7 +137,8 @@ class RegionMemory:
                     anchor_record = tracked.get((min(sources),region.name))
                     source_record = tracked.get((source,region.name))
                     if (not anchor_record or not source_record or not anchor_record.get('visible')
-                            or not source_record.get('visible')):
+                            or not source_record.get('visible') or not anchor_record.get('trusted',True)
+                            or not source_record.get('trusted',True)):
                         continue
                     source_box = move_region(region.box,anchor_record['box'],source_record['box'])
                     if source_box is None:
@@ -171,7 +172,8 @@ class RegionMemory:
                     visibility = 1.
                     if tracked is not None:
                         record = tracked.get((target, region.name))
-                        if record is None or not record.get('visible', False):
+                        if (record is None or not record.get('visible', False)
+                                or not record.get('trusted',True)):
                             continue  # Untracked frames never borrow stale masks.
                         box = move_region(region.box,anchor_record['box'],record['box'])
                         if box is None:

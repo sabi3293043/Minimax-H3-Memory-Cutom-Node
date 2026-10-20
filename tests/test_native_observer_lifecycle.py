@@ -163,6 +163,38 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(tracker.track.call_count,3)
         self.assertFalse(events[-1]['disabled_reason'])
 
+    def test_tracking_uses_current_memory_rgb_and_guidance_pair_indices_without_extra_decode(self):
+        from mosaichunk_h3.native_guidance import GuidanceConfig, GuidanceSession
+        from mosaichunk_h3.memory_controls import MemoryOptions
+        session = GuidanceSession(GuidanceConfig(mode='manual_frames', layers='0',
+            target_frames='5'), [1,24,3,2,2])
+        decoder = self.decoder()
+        tracker = SimpleNamespace(track=Mock(return_value={}), regions=(), last_reason='shared')
+        _, callbacks = self.run_observer(decoder, direct=True, guidance=session, callbacks=4,
+            tracker=tracker, observer_options={'memory_options':MemoryOptions(occlusion=True, preview='off')})
+        self.assertEqual(decoder.decode_video.call_count, 3)
+        self.assertEqual(tracker.track.call_count, 3)
+        for step, call in enumerate(tracker.track.call_args_list):
+            self.assertIs(call.args[0], decoder.decode_video.return_value)
+            self.assertEqual(call.kwargs['frame_pairs'], ((0,2),))
+            self.assertEqual(call.kwargs['step'], step)
+            self.assertEqual(call.kwargs['frame_budget'], 8)
+        self.assertEqual(callbacks, list(range(4)))
+
+    def test_tracking_follows_retrieval_after_reference_warmup(self):
+        from mosaichunk_h3.native_guidance import GuidanceConfig, GuidanceSession
+        from mosaichunk_h3.memory_controls import MemoryOptions
+        session = GuidanceSession(GuidanceConfig(mode='retrieved_frames', layers='0'), [1,24,3,2,2])
+        tracker = SimpleNamespace(track=Mock(return_value={}), regions=(), last_reason='shared')
+        decoder = self.decoder()
+        decoder.decode_video.return_value[:,:,:,4:] = 1.  # Stable, distinguishable appearance features.
+        self.run_observer(decoder, direct=True, guidance=session, callbacks=5, tracker=tracker,
+            observer_options={'memory_options':MemoryOptions(occlusion=True, preview='off')})
+        calls = tracker.track.call_args_list
+        self.assertEqual(calls[0].kwargs['frame_pairs'], ())
+        self.assertTrue(any(call.kwargs['frame_pairs'] for call in calls[1:]))
+        self.assertTrue(all(0 <= s < t < 3 for call in calls for s,t in call.kwargs['frame_pairs']))
+
     def test_invalid_runtime_budgets_fail_before_execution(self):
         for options in [dict(observation_interval=0), dict(observation_interval=101),
                         dict(disk_gib=float('inf')), dict(disk_gib=float('nan'))]:

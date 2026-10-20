@@ -95,7 +95,8 @@ def run(root, cpu_threads=0):
                       'No confident objects detected; whole-frame memory remains active')
             metrics = dict(cpu_threads=torch.get_num_threads(), detection_seconds=detection_seconds,
                 propagation_seconds=propagation_seconds,worker_seconds=time.perf_counter()-started)
-            print(json.dumps({'records':records,'regions':summary,'reason':reason,'metrics':metrics}), flush=True)
+            print(json.dumps({'records':records,'regions':summary,'reason':reason,'metrics':metrics,
+                              'observation':request.get('observation')}), flush=True)
         except Exception as exc:
             print(json.dumps({'error':f'{type(exc).__name__}: {exc}'}), flush=True)
 

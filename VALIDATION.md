@@ -1,5 +1,32 @@
 # Validation status
 
+## Retrieval-guided tracking from shared observations (2026-10-20)
+
+- 573 selected CPU/unit tests pass. Coverage includes source/target selection,
+  bridges/discovery, protected sources, short clips, bounded expansion on the
+  next observation, current step/resolution validation and untrusted-mask rejection.
+- Native observer lifecycle tests verify that tracking receives the same RGB
+  tensor returned by memory's decoder, with no additional decode. Retrieved
+  indices appear after reference warmup; manual targets and sampler callbacks
+  remain supported. Hidden, missing and low-confidence masks cannot supply
+  regional corrections; whole-frame guidance continues.
+- Real CPU SAM 2 uses 33 shared RGB frames sampled from an existing video and
+  one source object on a 5900X (24 threads). One uniform 16-frame refresh takes
+  32.55 s; the retrieval-guided eight-frame refresh takes 15.36 s. Uncertainty
+  requests 16 fresh frames next time, taking 32.84 s. Each observation performs
+  exactly one tracking pass, and the worker/temp directory are cleaned.
+- Temporal subsets are not equivalent: common-frame masks have median IoU 1.0
+  but minimum IoU 0.805 for sparse selection and 0.938 after wider coverage;
+  visibility flags match on the compared frames. This is a limited comparison,
+  not proof of identity preservation, unchanged quality or a whole-video speedup.
+  Continued uncertainty keeps coverage wide and can remove the sparse speed gain.
+- Actual native H3 CPU sampling with KJ Preview Override still passes both node
+  orders, bit-exact sharing on/off fixture outputs, standalone playback and
+  cancellation cleanup. Browser checks pass appended defaults in old workflows,
+  tracking labels, playback and unchanged serialization, with no new errors.
+- No trained full-checkpoint generation, VAE replacement, ComfyUI-core/KJ source
+  change or new dependency download is involved.
+
 ## Shared Tiny VAE frames, standalone preview and CPU budgets (2026-10-20)
 
 - 555 selected CPU/unit tests pass, including exact input/weight invalidation,

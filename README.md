@@ -122,6 +122,14 @@ first enabled execution downloads isolated SAM 2 dependencies and the 156 MB
 tiny tracker. Ordinary users do not need that download. See
 [MEMORY_CONTROLS.md](MEMORY_CONTROLS.md) for setup, controls and limitations.
 
+Tracking now selects indices from the same decoded observation used by memory
+and compatible previews. The default `retrieved` selection starts with eight
+frames around memory source/target matches, with intermediate/discovery coverage.
+Uncertainty widens the next fresh observation to at most 16; one segmentation
+pass runs per observation. `uniform` plus a budget of `16` retains broad fixed
+coverage. Sparse tracking can miss brief events; no extra VAE decode or model
+download is required, and appearance-memory observation budgets are unchanged.
+
 ## Native H3 visual observer (experimental)
 
 **Optional generation acceleration:** the same node now has

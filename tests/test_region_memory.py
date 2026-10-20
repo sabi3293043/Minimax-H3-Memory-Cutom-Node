@@ -58,6 +58,14 @@ class RegionTests(unittest.TestCase):
                  (1,'trousers'):dict(visible=False,box=[0,.5,1,1],confidence=0,mask=[[0]*4]*4)}
         self.assertFalse(bank.plan(frames,groups=(0,1,2),step=1,tracked=records))
 
+    def test_visible_but_untrusted_masks_never_supply_regional_guidance(self):
+        bank=RegionMemory(parse_regions(REGIONS))
+        frames=torch.full((3,3,8,8),.4)
+        bank.plan(frames,groups=(0,1,2),step=0)
+        records={(i,'trousers'):dict(visible=True,trusted=i==0,box=[0,.5,1,1],
+            confidence=.6 if i else 1.,mask=[[1]*4]*4) for i in range(3)}
+        self.assertFalse(bank.plan(frames,groups=(0,1,2),step=1,tracked=records))
+
     def test_each_region_receives_slots_when_background_has_many_matches(self):
         regions=parse_regions('[{"name":"subject","box":[0,0,0.5,1]},{"name":"background","box":[0.5,0,1,1]}]')
         bank=RegionMemory(regions)

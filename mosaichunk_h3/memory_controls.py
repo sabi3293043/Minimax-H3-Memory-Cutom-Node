@@ -18,11 +18,18 @@ class MemoryOptions:
     preview_frames: int = 16
     preview_resolution: int = 512
     preview_fps: float = 8.
+    tracking_selection: str = 'retrieved'
+    tracking_frame_budget: int = 8
 
     def validate(self):
         from .native_guidance import frame_numbers
         from .cpu_threads import validate_cpu_threads
         validate_cpu_threads(self.cpu_threads)
+        if self.tracking_selection not in ('retrieved', 'uniform'):
+            raise ValueError('Unknown occlusion_frame_selection mode')
+        if (isinstance(self.tracking_frame_budget, bool) or not isinstance(self.tracking_frame_budget, int)
+                or not 4 <= self.tracking_frame_budget <= 16):
+            raise ValueError('occlusion_frame_budget must be an integer from 4 to 16')
         import math
         if self.preview not in ('auto','off'):
             raise ValueError('Unknown memory_preview mode')

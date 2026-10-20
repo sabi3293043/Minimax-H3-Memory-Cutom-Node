@@ -28,6 +28,7 @@ class OcclusionTracker(AbstractContextManager):
         self.regions = ()
         self.automatic = False
         self.last_reason = ''
+        self._wide_next = False
 
     def __enter__(self):
         self.temp = tempfile.TemporaryDirectory(prefix='minimax-tracking-')
@@ -81,18 +82,29 @@ class OcclusionTracker(AbstractContextManager):
         self.close()
         raise TimeoutError('Optional SAM 2 tracker timed out; disable occlusion_aware_matching to continue')
 
-    def track(self, frames, regions, sources=(0,)):
+    def track(self, frames, regions, sources=(0,), *, frame_pairs=(), frame_budget=8,
+              selection='retrieved', step=None):
         started = time.perf_counter()
         from PIL import Image
-        import torch
+        from .tracking_selection import (select_tracking_frames, expand_tracking_frames,
+                                         tracking_uncertain, tracking_record_trusted)
+        from .region_memory import Region
+        if frames.ndim != 4 or frames.shape[1] != 3:
+            raise ValueError('Tracker consumes decoded [frames,3,height,width] RGB observations')
         self.automatic = not bool(regions)
         regions = tuple(regions) or self.regions
-        # Include every protected source; remaining slots sample the whole clip.
-        ids = sorted(set([int(v) for v in sources if 0 <= v < len(frames)]
-                         + torch.linspace(0,len(frames)-1,max(1,16-len(sources))).round().int().tolist()))[:16]
+        pairs = tuple(frame_pairs)
+        ids = select_tracking_frames(len(frames), sources=sources, pairs=pairs,
+                                     budget=frame_budget, mode=selection)
+        initial_ids = ids
         source = min(sources or (0,))
-        if source not in ids:
-            raise ValueError('Tracker source is outside the decoded video')
+        if selection == 'retrieved' and self._wide_next:
+            ids = expand_tracking_frames(len(frames), ids)
+        expanded = ids != initial_ids
+        observation = dict(step=step, frame_count=len(frames), resolution=list(frames.shape[-2:]))
+        # Encoding is transport only. All indices refer to the caller's existing
+        # current-step RGB; no VAE, separate capture, or persistent image bank.
+        import torch
         encoded = []
         for frame_id in ids:
             frame = frames[frame_id].detach().cpu()
@@ -103,17 +115,38 @@ class OcclusionTracker(AbstractContextManager):
             stream = io.BytesIO()
             image.save(stream, format='JPEG', quality=85)
             encoded.append(base64.b64encode(stream.getvalue()).decode())
-        request = dict(frames=encoded, ids=ids, source=ids.index(source), temp_root=self.temp.name, regions=[dict(name=r.name, box=r.box,
-            source=ids.index(source)) for r in regions])
+        request = dict(frames=encoded, ids=ids, source=ids.index(source),
+            observation=observation, temp_root=self.temp.name,
+            regions=[dict(name=r.name,box=r.box,source=ids.index(source)) for r in regions])
         self.process.stdin.write(json.dumps(request)+'\n')
         self.process.stdin.flush()
         result = self.wait(300)
-        self.last_metrics = dict(result.get('metrics',{}), wall_seconds=time.perf_counter()-started,
-                                 cpu_threads=self.cpu_threads)
-        from .region_memory import Region
-        self.regions = tuple(Region(r['name'],tuple(r['box'])) for r in result.get('regions',[]))
-        self.last_reason = result.get('reason','') + f'; CPU threads {self.cpu_threads}'
-        return {(r['frame'],r['region']):r for r in result['records']}
+        if result.get('observation') != observation:
+            raise RuntimeError('Tracker response does not match the current observation step/resolution')
+        records = {(r['frame'],r['region']):r for r in result['records']}
+        if any(frame not in ids for frame, _ in records):
+            raise RuntimeError('Tracker response contains frames outside the shared selection')
+        regions = tuple(Region(r['name'],tuple(r['box'])) for r in result.get('regions',[]))
+        # A hidden object is a normal case, not a reason to rerun an expensive
+        # backbone on the same observation. Broaden the NEXT fresh observation.
+        # Only a coverage flag survives; RGB and masks are never reused later.
+        uncertain = tracking_uncertain(records, ids, regions)
+        for record in records.values():
+            record['trusted'] = tracking_record_trusted(record)
+        self._wide_next = selection == 'retrieved' and uncertain
+        self.regions = regions
+        self.last_metrics = dict(wall_seconds=time.perf_counter()-started,cpu_threads=self.cpu_threads,
+            selection=selection, requested_frames=frame_budget, initial_frames=len(initial_ids),
+            selected_frames=len(ids), frame_ids=list(ids), initial_frame_ids=list(initial_ids),
+            processed_frames=len(ids), encoded_frames=len(encoded), fallback_expanded=expanded,
+            next_coverage_wide=self._wide_next, uncertain=uncertain, observation=observation,
+            retrieved_pairs=len(pairs), covered_pairs=sum(s in ids and t in ids for s,t in pairs),
+            refreshes=1, **{key:result.get('metrics',{}).get(key,0.)
+                for key in ('detection_seconds','propagation_seconds','worker_seconds')})
+        self.last_reason = (result.get('reason','') + f'; {selection} {len(ids)}/{len(frames)} shared frames'
+                            + ('; broader coverage after uncertainty' if expanded else '')
+                            + f'; CPU threads {self.cpu_threads}')
+        return records
 
     def close(self):
         if self.process is not None:
