@@ -219,16 +219,21 @@ class NativeVisualObserver:
                             if accelerated else None)
             if guided:
                 stack.enter_context(install_guidance(guider, session))
+            tracking_error = ''
             if self.memory_options.occlusion:
-                from .optional_occlusion import ensure_installed
-                from .occlusion_tracking import OcclusionTracker
-                with preserve_observation_rng():
-                    root = ensure_installed(progress=lambda message: notify_native(self.node_id, message, log=True))
-                    tracker = stack.enter_context(OcclusionTracker(root))
+                try:
+                    from .optional_occlusion import ensure_installed
+                    from .occlusion_tracking import OcclusionTracker
+                    with preserve_observation_rng():
+                        root = ensure_installed(progress=lambda message: notify_native(self.node_id, message, log=True))
+                        tracker = stack.enter_context(OcclusionTracker(root))
+                except Exception as exc:
+                    tracking_error = f'Tracking unavailable: {type(exc).__name__}: {str(exc)[:120]}; whole-frame memory continues'
+                    LOG.warning(tracking_error)
             try:
                 return self._sample(executor, noise, latent_image, sampler, sigmas,
                     denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes,
-                    guidance=session, acceleration=acceleration, tracker=tracker)
+                    guidance=session, acceleration=acceleration, tracker=tracker, tracking_error=tracking_error)
             finally:
                 if session is not None:
                     LOG.warning('Native Tiny VAE correction: %d observations, %d frame-pair proposals, '
@@ -238,7 +243,7 @@ class NativeVisualObserver:
 
     def _sample(self, executor, noise, latent_image, sampler, sigmas,
                 denoise_mask=None, callback=None, disable_pbar=False,
-                seed=None, latent_shapes=None, guidance=None, acceleration=None, tracker=None):
+                seed=None, latent_shapes=None, guidance=None, acceleration=None, tracker=None, tracking_error=''):
         import torch
         with preserve_observation_rng():
             decoder = _load_tae_decoder(self.tiny_vae_name)
@@ -276,7 +281,10 @@ class NativeVisualObserver:
             mapped_protected = protected
         index = AdaptiveVisualIndex(capacity=self.max_memory_frames,
                                     captures_per_step=self.max_frames, protected_frames=mapped_protected)
-        region_memory = RegionMemory(parse_regions(self.memory_options.regions), mapped_protected)
+        configured_regions = parse_regions(self.memory_options.regions)
+        region_memory = RegionMemory(configured_regions, mapped_protected)
+        tracking_failed = bool(tracking_error)
+        tracking_reason = tracking_error
         inspector = MemoryInspector(enabled=self.memory_options.inspect)
         settings = dict(observer=dict(max_frames=self.max_frames, max_memory_frames=self.max_memory_frames,
             min_progress=self.min_progress, observation_interval=self.observation_interval,
@@ -329,6 +337,8 @@ class NativeVisualObserver:
                     text += f'; preview {preview_size[1]}x{preview_size[0]}'
                 if store is None:
                     text += '; image storage off'
+                if self.memory_options.occlusion:
+                    text += '; ' + (tracking_reason or 'tracking initializing')
                 if acceleration is not None:
                     text += '; ' + acceleration.summary()
                 notify_native(self.node_id, text, log=log, state=state.lower(),
@@ -343,13 +353,16 @@ class NativeVisualObserver:
                     disabled_reason=disabled_reason,
                     inspector=inspector_entry,
                     guidance_details=guidance.diagnostics() if guidance is not None and self.memory_options.inspect else None,
-                    run_id=inspector.run_id, settings=settings, seed=seed)
+                    run_id=inspector.run_id, settings=settings, seed=seed,
+                    tracking=dict(requested=self.memory_options.occlusion,
+                        active=tracker is not None and not tracking_failed,
+                        automatic=not bool(configured_regions),reason=tracking_reason))
 
             report('Sampling', log=True)
 
             def observing_callback(step, x0, x, total):
                 nonlocal budget_full, disabled_reason, observations, observation_seconds, peak_cache_bytes
-                nonlocal skipped_observations, preview_size, observation_reason, inspector_entry
+                nonlocal skipped_observations, preview_size, observation_reason, inspector_entry, tracking_failed, tracking_reason
                 if guidance is not None:
                     guidance.progress = (step + 1) / max(1, total)
                 if acceleration is not None:
@@ -397,27 +410,44 @@ class NativeVisualObserver:
                                 )
                                 if guidance is not None:
                                     guidance.observe(frames, references, step=step, total=total)
-                                    if region_memory.regions:
-                                        groups = tuple(decoded_to_latent(f,len(frames),guidance.latent_t)
-                                                       for f in range(len(frames)))
-                                        sources = ()
-                                        if guidance.config.mode == 'manual_frames':
-                                            source_latent = decoded_to_latent(guidance.config.source_frame,pixel_count,guidance.latent_t)
-                                            sources = tuple(f for f,g in enumerate(groups) if g == source_latent)[:1]
-                                        tracked = tracker.track(frames,region_memory.regions,
-                                            sources or mapped_protected or (0,)) if tracker else None
-                                        plans = region_memory.plan(frames, groups=groups,step=step,
+                                    groups = tuple(decoded_to_latent(f,len(frames),guidance.latent_t)
+                                                   for f in range(len(frames)))
+                                    global_plans = tuple(RegionPlan(s,t,'whole frame',(0,0,1,1),(0,0,1,1),1.,
+                                        next(f for f,g in enumerate(groups) if g==s),
+                                        next(f for f,g in enumerate(groups) if g==t),regional=False)
+                                        for s,t in guidance.pairs)
+                                    sources = ()
+                                    if guidance.config.mode == 'manual_frames':
+                                        source_latent = decoded_to_latent(guidance.config.source_frame,pixel_count,guidance.latent_t)
+                                        sources = tuple(f for f,g in enumerate(groups) if g==source_latent)[:1]
+                                    tracked = None
+                                    tracking_event = dict(region='tracking',reason=tracking_reason) if tracking_reason else None
+                                    if tracker is not None and not tracking_failed:
+                                        try:
+                                            tracked = tracker.track(frames,configured_regions,
+                                                sources or mapped_protected or (0,))
+                                            region_memory.regions = tracker.regions
+                                            tracking_reason = tracker.last_reason
+                                            tracking_event = dict(region='tracking',reason=tracking_reason)
+                                        except Exception as exc:
+                                            tracking_failed = True
+                                            tracker.close()
+                                            tracking_event = dict(region='tracking',reason=
+                                                f'Tracking unavailable: {type(exc).__name__}: {str(exc)[:120]}; whole-frame memory continues')
+                                            tracking_reason = tracking_event['reason']
+                                            LOG.warning(tracking_reason)
+                                    regional_plans = ()
+                                    region_memory.events = []
+                                    if region_memory.regions and (not self.memory_options.occlusion or tracked is not None):
+                                        regional_plans = region_memory.plan(frames,groups=groups,step=step,
                                             source_frames=sources,tracked=tracked)
                                         if guidance.config.mode == 'manual_frames':
                                             targets = {decoded_to_latent(f,pixel_count,guidance.latent_t)
                                                        for f in frame_numbers(guidance.config.target_frames)}
-                                            plans = tuple(p for p in plans if p.target in targets)
-                                        guidance.set_region_plans(plans)
-                                    else:
-                                        plans = tuple(RegionPlan(s,t,'whole frame',(0,0,1,1),(0,0,1,1),1.,
-                                            next(f for f in range(len(frames)) if decoded_to_latent(f,len(frames),guidance.latent_t)==s),
-                                            next(f for f in range(len(frames)) if decoded_to_latent(f,len(frames),guidance.latent_t)==t))
-                                            for s,t in guidance.pairs)
+                                            regional_plans = tuple(p for p in regional_plans if p.target in targets)
+                                    if tracking_event:
+                                        region_memory.events.append(tracking_event)
+                                    plans = guidance.publish_plans(global_plans,regional_plans)
                                     try:
                                         groups = tuple(decoded_to_latent(f,len(frames),guidance.latent_t)
                                                        for f in range(len(frames)))
@@ -473,10 +503,6 @@ class NativeVisualObserver:
                             guidance.clear_plan()
                         observation_reason = f'{type(exc).__name__}: {str(exc)[:200]}'
                         inspector_entry = dict(step=step,plans=[],events=[dict(region='observation',reason=observation_reason)])
-                        if tracker is not None:
-                            # A failed tracker must not silently turn into fixed-box guidance.
-                            budget_full = True
-                            disabled_reason = 'Optional tracking/observation failed: ' + observation_reason
                         LOG.warning("Native H3 visual observation skipped step %s: %s", step, exc)
                     finally:
                         observation_seconds += time.perf_counter() - started
@@ -500,6 +526,9 @@ class NativeVisualObserver:
                             settings=settings, seed=seed, inspector=inspector, error=sampling_error,
                             metrics=dict(sampling_seconds=time.perf_counter()-sampling_started,
                                 observations=observations, observation_seconds=observation_seconds,
+                                tracking=dict(requested=self.memory_options.occlusion,
+                                    active=tracker is not None and not tracking_failed,
+                                    automatic=not bool(configured_regions),reason=tracking_reason),
                                 guidance=guidance.diagnostics() if guidance else None,
                                 acceleration=acceleration.metrics() if acceleration else None))
                         notify_native(self.node_id, f'Memory report saved: {path}', report_path=path)
@@ -605,12 +634,12 @@ class MosaiChunkH3NativeVisualObserver:
             "memory_preset": (["Consistency", "Balanced", "Speed", "Custom"], {"default": "Consistency",
                 "tooltip": "Frontend preset updates visible settings. Saved explicit values are always honored; edit any preset control to select Custom."}),
             "memory_regions": ("STRING", {"default": "[]", "multiline": True,
-                "tooltip": "Optional normalized boxes: [{\"name\":\"outfit\",\"box\":[0.2,0.1,0.8,1]}]. Draw regions in Memory inspector. Without tracking, boxes stay fixed in screen space."}),
+                "tooltip": "Optional normalized boxes: [{\"name\":\"outfit\",\"box\":[0.2,0.1,0.8,1]}]. Optional priorities supplement whole-frame memory. Draw boxes in Memory inspector. Without tracking, boxes stay fixed in screen space."}),
             "protected_frames": ("STRING", {"default": "", "tooltip": "Up to eight comma-separated final-video frame indices (zero-based). Pin clear full-outfit source frames; retained for this run only."}),
             "confidence_guidance": ("BOOLEAN", {"default": False, "tooltip": "Optional experimental attenuation by feature-match confidence. Never exceeds guidance_strength; compare with fixed strength."}),
             "memory_inspector": ("BOOLEAN", {"default": True, "tooltip": "Bounded in-memory preview cards, match reasons and correction map. No image files are retained."}),
             "export_memory_report": ("BOOLEAN", {"default": False, "tooltip": "Save a JSON settings/metrics report to output/minimax_memory_reports. No prompt text or image content is saved."}),
-            "occlusion_aware_matching": ("BOOLEAN", {"default": False, "tooltip": "Opt-in: automatically installs isolated SAM 2 packages and a 156 MB tiny checkpoint on first use. CPU tracker; needs selected regions. Slower. Temporary tracker JPEGs are deleted."}),
+            "occlusion_aware_matching": ("BOOLEAN", {"default": False, "tooltip": "Opt-in: automatically installs isolated SAM 2 packages and a 156 MB tiny checkpoint on first use. CPU tracker; automatically proposes objects when no regions are drawn. Whole-frame memory remains active. Slower. Temporary tracker JPEGs are deleted."}),
         }, "hidden": {"unique_id": "UNIQUE_ID"}}
 
     def apply(self, model, tiny_vae_name, max_frames=8, min_progress=0.25,

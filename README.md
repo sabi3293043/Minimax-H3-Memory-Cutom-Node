@@ -16,7 +16,9 @@ file, RAVEN LoRA, router, or full non-pruned checkpoint listed in the legacy
 sections below. Do not run the legacy model downloader for the native node.
 
 New nodes use **Consistency**; **Balanced** enables approximate acceleration.
-Use **Memory inspector** to select regions and protect source frames. Optional
+Use **Memory inspector** for diagnostics and optional regional priorities.
+Whole-frame memory stays active; tracking discovers objects automatically
+when no boxes are drawn. Optional
 occlusion tracking stays off and downloads nothing until explicitly enabled.
 See [MEMORY_CONTROLS.md](MEMORY_CONTROLS.md) for controls, setup and limitations.
 The implementation uses experimental visual/feature matching; trained-video

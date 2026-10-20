@@ -79,7 +79,7 @@ export function openInspector(node) {
   titlebar.className = 'toolbar'
   element('h2', 'MiniMax H3 Memory inspector', titlebar)
   button(titlebar, 'Close', () => panel.close())
-  element('p', 'Boxes select screen regions, not automatic body parts. Tracking follows selected regions when enabled. Settings changes apply to the next queued run.', panel)
+  element('p', 'Whole-frame memory stays active. Boxes add optional regional priorities. With tracking enabled, empty regions trigger automatic object proposals. Changes apply to the next queued run.', panel)
   const tools = element('div', undefined, panel)
   tools.className = 'toolbar'
   const preset = element('select', undefined, tools)
@@ -98,6 +98,7 @@ export function openInspector(node) {
     const detail = data.detail ?? {}
     download({ schema: 1, run_id: detail.run_id, seed: detail.seed,
       settings: detail.settings ?? {}, metrics: { sampling_seconds: detail.sampling_seconds, observations: detail.observations,
+        tracking: detail.tracking,
         observation_seconds: detail.observation_seconds, corrections: detail.corrections,
         guidance: detail.guidance_details, acceleration: detail.acceleration },
       node_values: Object.fromEntries((node.widgets ?? []).filter(w => !w.options || w.options.serialize !== false)
@@ -165,6 +166,7 @@ function render(node) {
   data.presetSelect.value = widget(node,'memory_preset')?.value ?? 'Custom'
   const decisions = detail.guidance_details?.decisions ?? []
   data.summary.textContent = [detail.message ?? 'Waiting for observations',
+    `Correction calls: whole frame ${detail.guidance_details?.global_corrections ?? 0}, regional ${detail.guidance_details?.regional_corrections ?? 0}`,
     `Protected video frames: ${widget(node,'protected_frames')?.value || 'none'}`,
     ...decisions.map(d => `${d.region}: source ${d.source}, target ${d.target}: ${d.corrected}/${d.tested ?? '?'} cells corrected (${d.reason})`),
     ...(data.history.at(-1)?.events ?? []).map(e=>`${e.region}: ${e.reason}`),

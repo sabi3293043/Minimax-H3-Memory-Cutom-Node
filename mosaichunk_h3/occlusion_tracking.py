@@ -22,6 +22,9 @@ class OcclusionTracker(AbstractContextManager):
         self.responses = queue.Queue(maxsize=4)
         self.errors = []
         self.temp = None
+        self.regions = ()
+        self.automatic = False
+        self.last_reason = ''
 
     def __enter__(self):
         self.temp = tempfile.TemporaryDirectory(prefix='minimax-tracking-')
@@ -75,6 +78,8 @@ class OcclusionTracker(AbstractContextManager):
     def track(self, frames, regions, sources=(0,)):
         from PIL import Image
         import torch
+        self.automatic = not bool(regions)
+        regions = tuple(regions) or self.regions
         # Include every protected source; remaining slots sample the whole clip.
         ids = sorted(set([int(v) for v in sources if 0 <= v < len(frames)]
                          + torch.linspace(0,len(frames)-1,max(1,16-len(sources))).round().int().tolist()))[:16]
@@ -91,11 +96,14 @@ class OcclusionTracker(AbstractContextManager):
             stream = io.BytesIO()
             image.save(stream, format='JPEG', quality=85)
             encoded.append(base64.b64encode(stream.getvalue()).decode())
-        request = dict(frames=encoded, ids=ids, temp_root=self.temp.name, regions=[dict(name=r.name, box=r.box,
+        request = dict(frames=encoded, ids=ids, source=ids.index(source), temp_root=self.temp.name, regions=[dict(name=r.name, box=r.box,
             source=ids.index(source)) for r in regions])
         self.process.stdin.write(json.dumps(request)+'\n')
         self.process.stdin.flush()
         result = self.wait(300)
+        from .region_memory import Region
+        self.regions = tuple(Region(r['name'],tuple(r['box'])) for r in result.get('regions',[]))
+        self.last_reason = result.get('reason','')
         return {(r['frame'],r['region']):r for r in result['records']}
 
     def close(self):

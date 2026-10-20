@@ -102,21 +102,32 @@ class GuidanceSession:
         self.progress = 0.
         self.corrections = self.corrected_rows = self.observations = 0
         self.matched_proposals = 0
+        self.global_corrections = self.regional_corrections = 0
         self.frame_h, self.frame_w = int(latent_shape[3]) // 2, int(latent_shape[4]) // 2
         self.region_plans = ()
         self.plan_version = 0
         self.decisions = []
         self.heatmap = {}
         self.evaluated_plan_version = None
-        from .region_memory import parse_regions
-        self.has_regions = bool(parse_regions(config.memory_regions))
 
-    def set_region_plans(self, plans):
+    def set_region_plans(self, plans, *, new_proposals=None):
         if tuple(plans) != self.region_plans:
             self.plan_version += 1
         self.region_plans = tuple(plans)
         self.pairs = tuple(dict.fromkeys((p.source, p.target) for p in plans))
-        self.matched_proposals += len(plans)
+        self.matched_proposals += len(plans) if new_proposals is None else new_proposals
+
+    def publish_plans(self, global_plans, regional_plans):
+        from .region_memory import combine_plans
+        plans = combine_plans(global_plans,regional_plans)
+        if any(p.regional for p in plans):
+            self.set_region_plans(plans,new_proposals=sum(p.regional for p in plans))
+        else:
+            if self.region_plans:
+                self.plan_version += 1
+            self.region_plans = ()
+            self.pairs = tuple((p.source,p.target) for p in plans)
+        return plans
 
     def clear_plan(self):
         self.pairs = self.region_plans = ()
@@ -124,6 +135,7 @@ class GuidanceSession:
 
     def diagnostics(self):
         return dict(corrected_rows=self.corrected_rows, corrections=self.corrections,
+                    global_corrections=self.global_corrections,regional_corrections=self.regional_corrections,
                     decisions=[dict(d) for d in self.decisions[-24:]],
                     heatmap={key:list(cells) for key,cells in self.heatmap.items()},
                     evaluated_plan_version=self.evaluated_plan_version,
@@ -133,8 +145,6 @@ class GuidanceSession:
     def observe(self, frames, references, *, step, total):
         """Publish frame IDs only. Previous-step tensors never enter attention."""
         self.observations += 1
-        if not self.has_regions:
-            self.region_plans = ()
         self.progress = (step + 1) / max(1, total)
         count = int(frames.shape[0])
         if self.config.mode == 'manual_frames':
@@ -181,7 +191,7 @@ class GuidanceSession:
         out = None
         from .region_memory import RegionPlan, grid_ids
         plans = self.region_plans or tuple(RegionPlan(s, t, 'whole frame', (0,0,1,1),
-            (0,0,1,1), 1., s, t) for s,t in self.pairs)
+            (0,0,1,1), 1., s, t,regional=False) for s,t in self.pairs)
         self.decisions = []
         self.evaluated_plan_version = self.plan_version
         # Source/target descriptors are computed once per frame/attention call.
@@ -194,9 +204,10 @@ class GuidanceSession:
                 feature_cache[frame] = F.normalize(values[:, ::stride][:,:128].float(), dim=-1)
             return feature_cache[frame]
         # Divide the anchor budget between regions instead of multiplying it.
-        per_plan = max(1, self.config.max_anchor_tokens // max(1, len({p.name for p in plans})))
+        regional_budget = max(1, self.config.max_anchor_tokens // max(1, len({p.name for p in plans if p.regional})))
         changed_targets = {}
         for plan in plans:
+            per_plan = regional_budget if plan.regional else self.config.max_anchor_tokens
             source_frame, target_frame = plan.source, plan.target
             source = start + source_frame * self.frame_rows
             target = start + target_frame * self.frame_rows
@@ -273,6 +284,10 @@ class GuidanceSession:
                 out[:, ids] = (normal.float() + delta).to(output.dtype)
                 self.corrected_rows += int(ids.numel())
                 self.corrections += 1
+                if plan.regional:
+                    self.regional_corrections += 1
+                else:
+                    self.global_corrections += 1
                 changed += int(ids.numel())
                 if self.config.inspect_memory:
                     cells = ((ids-target) // self.frame_w * 16 // self.frame_h * 16

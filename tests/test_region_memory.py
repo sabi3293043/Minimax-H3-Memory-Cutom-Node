@@ -122,10 +122,40 @@ class RegionTests(unittest.TestCase):
             self.assertNotIn('images',report)
             self.assertFalse(list(Path(directory).glob('*.partial')))
 
-    def test_optional_tracking_requires_explicit_regions(self):
+    def test_optional_tracking_accepts_empty_regions_for_automatic_proposals(self):
         MemoryOptions().validate()
-        with self.assertRaisesRegex(ValueError,'selected memory region'):
-            MemoryOptions(occlusion=True).validate()
+        self.assertTrue(MemoryOptions(occlusion=True).validate().occlusion)
+
+    def test_regional_priority_keeps_global_corrections_outside_the_box(self):
+        torch.manual_seed(3)
+        session=GuidanceSession(GuidanceConfig(mode='manual_frames',layers='0',
+            target_frames='5',max_anchor_tokens=8),[1,24,3,4,4])
+        global_plan=RegionPlan(0,2,'whole frame',(0,0,1,1),(0,0,1,1),1.,0,2,regional=False)
+        priority=RegionPlan(0,2,'outfit',(0,.5,1,1),(0,.5,1,1),1.,0,2)
+        plans=session.publish_plans((global_plan,),(priority,))
+        self.assertEqual(len(plans),2)
+        q,k,v=[torch.randn(1,2,16,8) for _ in range(3)]
+        v[:,:,12:16]=v[:,:,4:8]+.0001
+        layout=SimpleNamespace(segments=[(0,2,'text'),(2,4,'audio'),(4,16,'video')])
+        def backend(q,k,v,heads,**kwargs):
+            return F.scaled_dot_product_attention(q,k,v).transpose(1,2).flatten(2)
+        normal=backend(q,k,v,2)
+        output=session.attention(backend,q,k,v,2,skip_reshape=True,
+            transformer_options={'block_index':0,'minimax_h3_layout':layout})
+        self.assertTrue(torch.equal(output[:,:12],normal[:,:12]))
+        self.assertFalse(torch.equal(output[:,12:14],normal[:,12:14]))
+        self.assertFalse(torch.equal(output[:,14:],normal[:,14:]))
+        self.assertGreater(session.global_corrections,0)
+        self.assertGreater(session.regional_corrections,0)
+
+    def test_empty_regional_results_restore_global_plan(self):
+        session=GuidanceSession(GuidanceConfig(),[1,24,3,4,4])
+        full=RegionPlan(0,2,'whole frame',(0,0,1,1),(0,0,1,1),1.,0,2,regional=False)
+        roi=RegionPlan(0,2,'outfit',(0,.5,1,1),(0,.5,1,1),1.,0,2)
+        session.publish_plans((full,),(roi,))
+        session.publish_plans((full,),())
+        self.assertEqual(session.pairs,((0,2),))
+        self.assertFalse(session.region_plans)
 
 
 if __name__=='__main__':unittest.main()

@@ -38,7 +38,9 @@ Cards are proposals for subsequent evaluations; a proposed pair is not proof
 that clothing was corrected. The overlay is accumulated coverage, not a
 measurement of visual improvement or semantic body-part detection.
 
-Draw a box over a source preview and give it a name such as `face`, `coat` or
+Whole-frame matching stays active, including characters and scenery. Drawing a
+box adds regional priority; it never switches the node to outfit-only memory.
+Draw an optional box over a source preview and give it a name such as `face`, `coat` or
 `trousers`. Up to four regions are supported. Boxes are stored as normalized
 coordinates in `memory_regions`, for example:
 
@@ -54,8 +56,9 @@ multiple corrections to the same target token in a model evaluation.
 
 Images used by the inspector are bounded thumbnails held in browser/process RAM
 only. The browser retains at most 32 observation messages, with at most four
-cards per message. It creates no persistent image cache. Close the panel or
-disable `memory_inspector` to avoid thumbnail encoding. The old optional
+cards per message. It creates no persistent image cache. Disable
+`memory_inspector` to avoid thumbnail encoding; closing the window alone does
+not disable diagnostic collection. The old optional
 `store_observation_images` remains separate and its run-owned cache is removed.
 
 ## Protected sources and stable appearance references
@@ -87,7 +90,10 @@ corrections; compare it on the same seed rather than assuming it is better.
 
 `occlusion_aware_matching=false` is the default. Importing/installing the node,
 using presets, or running ordinary memory guidance downloads nothing for SAM 2.
-After selecting a region, enable the checkbox. The first enabled execution
+Enable the checkbox with or without manual regions. With no boxes, the existing
+SAM 2 model automatically proposes up to four confident objects from a source
+preview. These are generic object proposals, not semantic clothing labels.
+Manual boxes remain optional priorities. The first enabled execution
 automatically installs the optional packages and downloads the official
 **SAM 2.1 Hiera tiny checkpoint (156 MB)**. Subsequent runs reuse it.
 
@@ -111,7 +117,9 @@ The tracker runs in a separate CPU process with two threads, preserving GPU
 headroom for H3. It uses a maximum of 16 sampled observation frames and four
 selected regions per refresh. CPU tracking can be substantially slower and use
 additional system RAM. Sparse preview frames can miss a short occlusion.
-Untracked or hidden targets receive no regional guidance; old masks are not
+Untracked or hidden targets receive no regional guidance; whole-frame matching
+continues. No detections, installation/startup failure or a failed refresh
+falls back to whole-frame guidance with an explicit notice. Old masks are not
 reused after a failed refresh. Mask area/confidence tests are heuristic, not a
 guarantee of identity or reliable reacquisition after a long absence.
 
@@ -127,8 +135,7 @@ Upstream implementation and license:
 ## Compatibility and reports
 
 Preflight checks reject unsupported CFG, denoise masks, model geometry,
-guidance layers, conflicting generation caches, and missing region controls
-before sampling. Missing Tiny VAE files name the required decoder and folder.
+guidance layers, conflicting generation caches, before sampling. Manual regions are not required for tracking. Missing Tiny VAE files name the required decoder and folder.
 The original sampler and model options are restored after success, interruption
 or failure. No ComfyUI core, launcher, diffusion checkpoint or LoRA is edited.
 

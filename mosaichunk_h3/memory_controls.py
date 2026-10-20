@@ -15,11 +15,9 @@ class MemoryOptions:
 
     def validate(self):
         from .native_guidance import frame_numbers
-        regions = parse_regions(self.regions)
+        parse_regions(self.regions)
         if len(frame_numbers(self.protected_frames)) > 8:
             raise ValueError('Protect at most eight frames')
-        if self.occlusion and not regions:
-            raise ValueError('Occlusion tracking needs a selected memory region. Draw a box in Memory inspector or enter memory_regions.')
         if self.preset not in ('Consistency', 'Balanced', 'Speed', 'Custom'):
             raise ValueError('Unknown memory preset')
         return self

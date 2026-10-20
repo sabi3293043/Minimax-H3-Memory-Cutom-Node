@@ -27,7 +27,11 @@ class MemoryInspector:
             plans = (RegionPlan(0,0,'preview only; no accepted pair',(0,0,1,1),
                                 (0,0,1,1),0.,0,0),)
         cards = []
-        for plan in plans[:4]:
+        selected = list(plans[:4])
+        global_plan = next((p for p in plans if not getattr(p,'regional',True)),None)
+        if global_plan is not None and not any(not getattr(p,'regional',True) for p in selected):
+            selected[-1] = global_plan
+        for plan in selected:
             images = []
             for frame_id, box, label in ((plan.source_frame, plan.source_box, 'source'),
                                          (plan.target_frame, plan.target_box, 'target')):

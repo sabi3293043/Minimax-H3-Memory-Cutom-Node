@@ -32,7 +32,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(callbacks, list(range(12)))
 
     def run_observer(self, decoder, *, callbacks=6, observer_options=None, guidance=None,
-                     callback=None, direct=False, shape=None):
+                     callback=None, direct=False, shape=None, tracker=None):
         shape = shape or [1, 24, 3, 2, 2]
         x0 = torch.zeros(shape)
         x0_original = x0.clone()
@@ -57,7 +57,7 @@ class LifecycleTests(unittest.TestCase):
                     method = observer._sample if direct else observer
                     result = method(executor, None, None, None, None,
                         callback=downstream, latent_shapes=[shape, [1, 32, 2]],
-                        **({'guidance': guidance} if direct else {}))
+                        **({'guidance': guidance,'tracker':tracker} if direct else {}))
                 finally:
                     self.assertEqual(list(Path(root).iterdir()), [])
                     self.assertTrue(torch.equal(x0, x0_original))
@@ -130,6 +130,38 @@ class LifecycleTests(unittest.TestCase):
                 if step<3:self.assertEqual(session.pairs,((0,2),))
             self.run_observer(self.decoder(),direct=True,guidance=session,callbacks=4,
                 callback=check_plan,observer_options={'memory_options':MemoryOptions(inspect=inspect)})
+
+    def test_tracking_failure_keeps_whole_frame_memory_and_callbacks(self):
+        from mosaichunk_h3.native_guidance import GuidanceConfig,GuidanceSession
+        from mosaichunk_h3.memory_controls import MemoryOptions
+        session=GuidanceSession(GuidanceConfig(mode='manual_frames',layers='0',
+            target_frames='5'),[1,24,3,2,2])
+        tracker=SimpleNamespace(track=Mock(side_effect=RuntimeError('tracker unavailable')),close=Mock())
+        def check_plan(step,*args):
+            if step<3:self.assertEqual(session.pairs,((0,2),))
+        events,forwarded=self.run_observer(self.decoder(),direct=True,guidance=session,
+            callbacks=4,callback=check_plan,tracker=tracker,
+            observer_options={'memory_options':MemoryOptions(occlusion=True,inspect=True)})
+        self.assertEqual(forwarded,[0,1,2,3])
+        self.assertEqual(tracker.track.call_count,1)
+        tracker.close.assert_called_once()
+        self.assertFalse(events[-1]['disabled_reason'])
+        self.assertIn('whole-frame memory continues',events[-1]['tracking']['reason'])
+
+    def test_no_detected_objects_keeps_whole_frame_memory(self):
+        from mosaichunk_h3.native_guidance import GuidanceConfig,GuidanceSession
+        from mosaichunk_h3.memory_controls import MemoryOptions
+        session=GuidanceSession(GuidanceConfig(mode='manual_frames',layers='0',
+            target_frames='5'),[1,24,3,2,2])
+        tracker=SimpleNamespace(track=Mock(return_value={}),regions=(),
+            last_reason='No confident objects; whole-frame memory remains active')
+        def check_plan(step,*args):
+            if step<3:self.assertEqual(session.pairs,((0,2),))
+        events,_=self.run_observer(self.decoder(),direct=True,guidance=session,callbacks=4,
+            callback=check_plan,tracker=tracker,
+            observer_options={'memory_options':MemoryOptions(occlusion=True,inspect=True)})
+        self.assertEqual(tracker.track.call_count,3)
+        self.assertFalse(events[-1]['disabled_reason'])
 
     def test_invalid_runtime_budgets_fail_before_execution(self):
         for options in [dict(observation_interval=0), dict(observation_interval=101),

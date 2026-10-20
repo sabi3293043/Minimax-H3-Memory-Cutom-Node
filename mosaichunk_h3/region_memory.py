@@ -91,6 +91,21 @@ class RegionPlan:
     target_frame: int
     source_mask: object = None
     target_mask: object = None
+    regional: bool = True
+
+
+def combine_plans(global_plans, regional_plans):
+    """Regional priorities supplement global memory without double correction.
+
+    A source cannot also be corrected as a target in this evaluation. Global
+    source anchors win conflicts; optional regional plans cannot remove them.
+    """
+    global_plans = tuple(global_plans)
+    anchors = {p.source for p in global_plans}
+    regional = tuple(p for p in regional_plans if p.target not in anchors)
+    regional_sources = {p.source for p in regional}
+    general = tuple(p for p in global_plans if p.target not in regional_sources)
+    return regional + general
 
 
 class RegionMemory:

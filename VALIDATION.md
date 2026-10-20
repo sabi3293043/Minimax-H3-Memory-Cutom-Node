@@ -1,5 +1,16 @@
 # Validation status
 
+## Whole-scene tracking fix (2026-10-20)
+
+- 524 CPU/unit tests pass, including empty-region opt-in, global guidance outside
+  regional boxes, anchor protection, no-detection fallback and tracker failure.
+- Real SAM 2 CPU inference discovers one object from three synthetic frames
+  without a manual box, tracks it, refreshes it and cleans temporary files.
+- Native tiny H3 CPU sampling still passes text, first, first/last and reference
+  conditioning, residual reuse and cancellation with whole-frame guidance.
+- Browser interaction checks pass with the updated whole-frame/priority controls.
+- Full trained-video identity/occlusion quality still requires video comparisons.
+
 ## Native region memory and optional tracking (2026-10-20)
 
 - 517 selected CPU/unit tests cover legacy contracts plus region isolation,
