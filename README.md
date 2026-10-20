@@ -102,7 +102,7 @@ drift and final-detail protection. Both preserve the previous defaults; see the
 same guide for the staged test procedure and limitations.
 
 For **normal full-video MiniMax H3 sampling**, the separately registered
-**MosaiChunk H3 Native Visual Observer (experimental)** MODEL-to-MODEL node
+**MiniMax H3 Memory — Native Visual Observer (experimental)** MODEL-to-MODEL node
 allows a visual-memory capture experiment without invoking RAVEN's
 chunk-by-chunk sampler. Place it in your native MODEL chain upstream of the
 normal H3 guider/sampler. Unlike `MosaiChunk H3 Conditioning`, it leaves the
