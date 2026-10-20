@@ -8,7 +8,7 @@ from unittest.mock import patch
 import torch
 from PIL import Image
 
-from mosaichunk_h3.native_preview import MemoryPreview,has_external_preview,external_preview_uses_decoder,select_indices
+from mosaichunk_h3.native_preview import MemoryPreview,RepairComparison,has_external_preview,external_preview_uses_decoder,select_indices
 
 
 class PreviewTests(unittest.TestCase):
@@ -45,6 +45,56 @@ class PreviewTests(unittest.TestCase):
             self.assertEqual(len(payload['frames']),3)
             self.assertEqual(payload['step'],5)
             self.assertEqual(payload['indices'],(0,2,4))
+
+    def test_repair_comparison_reuses_bounded_aligned_frames_and_keeps_rejected_attempt(self):
+        before=torch.zeros(17,3,24,32,dtype=torch.uint8)
+        after=torch.full_like(before,200)
+        with patch('mosaichunk_h3.native_preview.send') as send,patch.object(MemoryPreview,'encode',wraps=MemoryPreview.encode) as encode:
+            preview=RepairComparison('5',enabled=True,frames=3,max_resolution=16)
+            preview.start(before)
+            initial=send.call_args.kwargs
+            preview.finish(after,outcome='rejected',caption='Original retained')
+            final=send.call_args.kwargs
+        self.assertEqual(encode.call_count,2)
+        self.assertEqual(initial['indices'],(0,8,16))
+        self.assertEqual(initial['comparison']['phase'],'inspecting')
+        self.assertIsNone(initial['comparison']['after'])
+        self.assertEqual(final['comparison']['before'],initial['comparison']['before'])
+        self.assertEqual(final['comparison']['outcome'],'rejected')
+        self.assertEqual(len(final['comparison']['before']),3)
+        self.assertEqual(len(final['comparison']['after']),3)
+        for key in ('before','after'):
+            image=Image.open(io.BytesIO(base64.b64decode(final['comparison'][key][0])))
+            self.assertEqual(image.size,(16,12))
+            self.assertEqual(image.getpixel((4,4)),(0,0,0) if key=='before' else (200,200,200))
+
+    def test_skipped_repair_never_encodes_an_after_view(self):
+        with patch('mosaichunk_h3.native_preview.send') as send,patch.object(MemoryPreview,'encode',return_value=['jpeg']) as encode:
+            preview=RepairComparison('5',enabled=True,frames=1)
+            preview.start(torch.zeros(3,3,4,4))
+            preview.finish(outcome='skipped',caption='Original retained')
+        self.assertEqual(encode.call_count,1)
+        self.assertIsNone(send.call_args.kwargs['comparison']['after'])
+        self.assertEqual(send.call_args.kwargs['comparison']['outcome'],'skipped')
+
+    def test_comparison_off_encodes_and_sends_nothing(self):
+        with patch('mosaichunk_h3.native_preview.send') as send,patch.object(MemoryPreview,'encode') as encode:
+            for node,enabled in (('5',False),(None,True)):
+                preview=RepairComparison(node,enabled=enabled)
+                preview.start(torch.zeros(3,3,4,4))
+                preview.finish(outcome='skipped',caption='Retained')
+        send.assert_not_called();encode.assert_not_called()
+
+    def test_comparison_geometry_failure_does_not_misrepresent_the_saved_result(self):
+        with patch('mosaichunk_h3.native_preview.send') as send:
+            preview=RepairComparison('5',enabled=True)
+            preview.start(torch.zeros(3,3,4,4))
+            with self.assertLogs('mosaichunk_h3.native_preview',level='WARNING'):
+                preview.finish(torch.zeros(2,3,4,4),outcome='accepted',caption='Repair accepted')
+        payload=send.call_args.kwargs['comparison']
+        self.assertEqual(payload['outcome'],'accepted')
+        self.assertTrue(payload['unavailable'])
+        self.assertIsNone(payload['after'])
 
     def test_disabled_preview_does_not_start_encoder(self):
         with patch.object(MemoryPreview,'encode') as encode:

@@ -1,5 +1,33 @@
 # Validation status
 
+## Synchronized second-pass comparison (2026-10-20)
+
+- 605 selected CPU/unit tests pass. Tests verify aligned bounded JPEG frame
+  selection, reuse of the encoded before view, rejected-attempt visibility,
+  skipped/disabled behavior and preview failure handling. Repair lifecycle tests
+  count exactly the existing inspection and evaluation decodes: two for an
+  attempted repair, one when skipped or when sampling fails before evaluation.
+  Comparison off keeps only the ordinary retained-result preview; preview off
+  prevents comparison delivery even when its separate toggle is enabled.
+- Real ComfyUI frontend checks exercise shared playback and frame scrubbing;
+  canvas pixels confirm both panels select the corresponding before/after frame.
+  Accepted, rejected, skipped and failed outcomes render distinctly. The before
+  view stays visible while external preview runs. New-run/interruption cleanup,
+  ordinary preview restoration and unchanged generation settings pass, with no
+  new browser errors after fixture startup. The two-panel layout was inspected
+  in an actual browser screenshot.
+  The comparison toggle defaults off, including in older saved repair workflows;
+  an explicitly enabled toggle survives workflow serialization.
+- Actual tiny native H3 CPU sampling with real KJ Preview Override exercises
+  comparison messages for accepted and rejected repairs. With comparison on,
+  output remains bit-exact to the corresponding comparison-off result; actual
+  denoiser evaluation counts are unchanged. Other text/keyframe/reference,
+  cancellation and both-wrapper-order contracts still pass. Proposal selection
+  and acceptance are forced in this execution probe, as described below.
+- No model/VAE download, additional model evaluation or VAE decode is introduced
+  by the comparison. Bounded CPU JPEG encoding, transport and browser storage
+  still have overhead. No full-checkpoint quality/speed comparison is claimed.
+
 ## Optional masked repair and check scheduling (2026-10-20)
 
 - 599 selected CPU/unit tests pass. New coverage includes manual/automatic check

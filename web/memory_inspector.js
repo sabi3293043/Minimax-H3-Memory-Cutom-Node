@@ -259,6 +259,7 @@ app.registerExtension({
         if (control.name === 'second_pass') control.label = 'Second-pass repair (experimental)'
         if (control.name === 'second_pass_steps') control.label = 'Manual repair steps'
         if (control.name === 'auto_second_pass_steps') control.label = 'Auto repair steps (estimate)'
+        if (control.name === 'second_pass_comparison') control.label = 'Before/After comparison'
         const previous = control.callback
         control.callback = (...values) => {
           previous?.apply(control,values)

@@ -31,6 +31,10 @@ your existing sampler and Tiny VAE. Both start off. Automatic skipping and
 repair-step estimates are heuristics; they do not certify visual errors or the
 number of steps needed to fix them. See the
 [testing instructions and limitations](MEMORY_CONTROLS.md#optional-check-skipping-and-second-pass-repair).
+Enable the optional **Before/After comparison** toggle (off by default), with
+second-pass repair and preview enabled, for synchronized playback in this same
+node, including a labelled rejected attempt. It reuses
+already-decoded Tiny VAE frames and does not require a separate comparison node.
 
 ## Legacy RAVEN chunk backend
 

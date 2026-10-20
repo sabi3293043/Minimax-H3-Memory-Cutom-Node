@@ -779,6 +779,8 @@ class MosaiChunkH3NativeVisualObserver:
                 "tooltip": "RGB drift threshold for structurally aligned repair candidates. Heuristic, not semantic inconsistency detection. Camera/pose changes and ambiguous matches are withheld."}),
             "second_pass_max_area": ("FLOAT", {"default": .20,"min": .01,"max": .50,"step": .01,
                 "tooltip": "Maximum fraction of video latents eligible for repair. Source/reference frames remain protected. This limits changes, not transformer computation."}),
+            "second_pass_comparison": ("BOOLEAN", {"default": False,
+                "tooltip": "Optional synchronized Before/After playback in this node during second-pass repair. Requires second_pass and memory_preview=auto. Reuses existing decoded RGB; adds bounded CPU JPEG/browser memory, no extra VAE or model work. Off keeps the ordinary retained-result preview."}),
         }, "hidden": {"unique_id": "UNIQUE_ID"}}
 
     def apply(self, model, tiny_vae_name, max_frames=8, min_progress=0.25,
@@ -801,7 +803,7 @@ class MosaiChunkH3NativeVisualObserver:
               skip_consistency_checks=False,checks_to_skip=1,auto_check_skipping=False,
               second_pass=False,second_pass_steps=6,auto_second_pass_steps=False,
               second_pass_max_steps=12,second_pass_strength=.25,second_pass_threshold=.10,
-              second_pass_max_area=.20):
+              second_pass_max_area=.20,second_pass_comparison=False):
         from comfy.patcher_extension import WrappersMP
         from .native_guidance import GuidanceConfig
         from .generation_acceleration import AccelerationConfig
@@ -817,7 +819,8 @@ class MosaiChunkH3NativeVisualObserver:
             cpu_threads=occlusion_cpu_threads,share_frames=bool(share_tiny_vae_frames),
             preview=memory_preview,preview_frames=memory_preview_frames,
             preview_resolution=memory_preview_resolution,preview_fps=memory_preview_fps,
-            tracking_selection=occlusion_frame_selection,tracking_frame_budget=occlusion_frame_budget).validate()
+            tracking_selection=occlusion_frame_selection,tracking_frame_budget=occlusion_frame_budget,
+            compare_repair=bool(second_pass_comparison)).validate()
         acceleration = AccelerationConfig(mode=generation_acceleration, sol_tau=float(sol_tau),
             start=float(acceleration_start), end=float(acceleration_end),
             cache_threshold=float(cache_threshold), cache_max_reuse=int(cache_max_reuse),

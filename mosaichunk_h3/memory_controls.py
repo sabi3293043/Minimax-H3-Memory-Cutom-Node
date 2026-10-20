@@ -20,6 +20,7 @@ class MemoryOptions:
     preview_fps: float = 8.
     tracking_selection: str = 'retrieved'
     tracking_frame_budget: int = 8
+    compare_repair: bool = False
 
     def validate(self):
         from .native_guidance import frame_numbers

@@ -273,8 +273,8 @@ the original, while cancellation still cancels. No confident candidates means
 zero extra sampler steps. Both normal and denoised sampler outputs agree with
 the retained result. The inspector/report shows the proposal count, repair
 budget, heuristic scores and acceptance. Correction counts/maps describe the
-attempted repair, including when rejected. The node's final player identifies
-the retained result; an external preview may have shown a rejected candidate
+attempted repair, including when rejected. The node's comparison labels which
+result is retained; an external preview may have shown a rejected candidate
 during repair.
 
 This requires native H3 video/audio denoise-mask support in ComfyUI and a complete
@@ -284,6 +284,41 @@ Test manual skipping and manual second-pass repair separately against the same
 seed with both features off before trying their automatic controls. Inspect the
 video and soundtrack as well as timings. No trained-checkpoint end-to-end
 speedup or quality improvement has been established for these features.
+
+### Before / After playback
+
+Enable **Before/After comparison** (`second_pass_comparison=true`, default off),
+with `second_pass=true` and `memory_preview=auto`. The same node then shows two
+synchronized preview panels. **Before** appears after the completed first-pass
+prediction is decoded for inspection, and stays available while inspection and
+repair run. **After** appears when the attempted repair has been decoded for
+evaluation. Play/pause and the frame scrubber control both sides together.
+The right side does not decode every intermediate repair step.
+
+Both panels reuse those existing CPU RGB frames. The before view is encoded
+once and the after view once, using identical temporal indices. No extra model
+evaluation, Tiny VAE decode, final VAE decode or disk file is needed for the
+comparison. Bounded JPEG encoding, transmission and browser image storage have
+some CPU/RAM cost. `memory_preview_frames`, `memory_preview_resolution` and
+`memory_preview_fps` control the comparison too. This is a silent, sampled
+Tiny VAE approximation; it is not the final full-frame-rate video or soundtrack.
+Widen the node to enlarge the two views.
+
+The labels distinguish an **accepted repair (after saved)** from a **rejected
+attempt (before saved)**. A rejected attempt remains visible for diagnosis;
+viewing it does not select it as the output. Skipped or failed repairs show the
+before view and an explanatory message, with no invented after view. Preview
+encoding failures leave the sampler's result unchanged. KJ's external preview
+may continue independently; it does not hide this completed-prediction comparison.
+
+Comparison frames are transient browser content, cleared on the next generation,
+interruption, execution error or node removal. They are not workflow widget
+values or saved comparison files. The MODEL sockets and sampler wiring stay the
+same; no separate compare node or sampler is required. Turning only
+`second_pass_comparison` off keeps the ordinary single retained-result preview
+and avoids a separately encoded/stored before view. Older workflows keep this
+toggle off. Set `memory_preview=off` to disable all memory preview encoding
+and delivery.
 
 ## Compatibility and reports
 

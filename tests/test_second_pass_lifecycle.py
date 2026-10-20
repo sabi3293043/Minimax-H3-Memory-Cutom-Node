@@ -38,7 +38,7 @@ class Guider:
 
 
 class SecondPassLifecycleTests(unittest.TestCase):
-    def run_repair(self,*,accept=True,empty=False,fail=False,callback=None,cfg=1.,sigmas=None):
+    def run_repair(self,*,accept=True,empty=False,fail=False,callback=None,cfg=1.,sigmas=None,preview=False,comparison=False):
         shape=(1,24,3,4,4);audio_shape=(1,32,2,5)
         clean=[torch.ones(shape)*.2,torch.ones(audio_shape)*.3]
         baseline=comfy.utils.pack_latents(clean)[0]
@@ -46,7 +46,8 @@ class SecondPassLifecycleTests(unittest.TestCase):
         executor=SimpleNamespace(class_obj=guider)
         observer=NativeVisualObserver(tiny_vae_name='auto',max_frames=2,min_progress=0,disk_gib=.1,
             guidance=GuidanceConfig(mode='manual_frames',layers='0',target_frames='5'),
-            memory_options=MemoryOptions(preview='off',inspect=True),second_pass=SecondPassSettings(enabled=True,steps=4))
+            node_id='test' if preview else None,
+            memory_options=MemoryOptions(preview='auto' if preview else 'off',inspect=True,compare_repair=comparison),second_pass=SecondPassSettings(enabled=True,steps=4))
         mask=torch.zeros(1,1,3,4,4);mask[:,:,2,2:,2:]=1
         plan=SimpleNamespace(mask=mask,plans=() if empty else (RegionPlan(0,2,'test',(0,0,1,1),(.5,.5,1,1),1.,0,2),),
             area=0. if empty else float(mask.mean()),severity=.2,
@@ -64,6 +65,7 @@ class SecondPassLifecycleTests(unittest.TestCase):
         with patch.object(NativeVisualObserver,'_call',autospec=True,side_effect=first_pass) as primary,\
              patch('mosaichunk_h3.native_visual_observer._load_tae_decoder',return_value=decoder),\
              patch('mosaichunk_h3.repair_pass.build_repair_plan',return_value=plan),\
+             patch('mosaichunk_h3.native_preview.send') as preview_send,\
              patch('mosaichunk_h3.native_status.notify_native',side_effect=lambda node,message,**data:events.append(data)):
             try:
                 result=execute_second_pass(observer,executor,None,None,None,
@@ -71,7 +73,34 @@ class SecondPassLifecycleTests(unittest.TestCase):
                     latent_shapes=[shape,audio_shape],shared=None)
             finally:
                 self.assertEqual(guider.model_options,original)
+        self.preview_events=[call.kwargs for call in preview_send.call_args_list]
+        self.decoder_calls=decoder.decode_video.call_count
         return result,baseline,mask,guider.calls,outputs,events
+
+    def test_before_after_preview_uses_only_existing_inspection_and_evaluation_decodes(self):
+        for accept in (True,False):
+            self.run_repair(accept=accept,preview=True,comparison=True)
+            self.assertEqual(self.decoder_calls,2)
+            self.assertEqual(len(self.preview_events),2)
+            self.assertIsNone(self.preview_events[0]['comparison']['after'])
+            self.assertEqual(self.preview_events[-1]['comparison']['outcome'],'accepted' if accept else 'rejected')
+            self.assertTrue(self.preview_events[-1]['comparison']['before'])
+            self.assertTrue(self.preview_events[-1]['comparison']['after'])
+        for options,outcome in ((dict(empty=True),'skipped'),(dict(fail=True),'failed')):
+            self.run_repair(preview=True,comparison=True,**options)
+            self.assertEqual(self.decoder_calls,1)
+            self.assertEqual(self.preview_events[-1]['comparison']['outcome'],outcome)
+            self.assertIsNone(self.preview_events[-1]['comparison']['after'])
+
+    def test_comparison_off_keeps_only_the_retained_result_preview(self):
+        for accept in (True,False):
+            self.run_repair(accept=accept,preview=True)
+            self.assertEqual(self.decoder_calls,2)
+            self.assertEqual(len(self.preview_events),1)
+            self.assertNotIn('comparison',self.preview_events[0])
+            self.assertTrue(self.preview_events[0]['frames'])
+        self.run_repair(comparison=True,preview=False)
+        self.assertEqual(self.preview_events,[])
 
     def test_masked_output_and_audio_are_preserved_and_x0_agrees(self):
         output,baseline,mask,calls,x0,events=self.run_repair()
