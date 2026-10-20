@@ -74,6 +74,27 @@ def resize_observation(video, size):
     return torch.stack(frames, dim=2)
 
 
+def decode_observation_views(decoder, video, *, size, reference_sizes=()):
+    """Current-detail preview plus same-scale queries for retained history.
+
+    RGB resized after decoding cannot calibrate different decoder input sizes.
+    Decode each retained size once, with the current preview first. Progressive
+    mode has at most three sizes. No historical latents or GPU KV are retained.
+    """
+    sizes = tuple(dict.fromkeys((tuple(size), *(tuple(s) for s in reference_sizes))))
+    views = {}
+    for dimensions in sizes:
+        frames = decoder.decode_video(resize_observation(video[:1], dimensions), frame_indices=None)
+        if len(sizes) > 1:
+            # A temporal decoder may return GPU RGB; finish its host transfer
+            # before decoding another scale rather than stacking GPU previews.
+            frames = frames.cpu()
+        if views and frames.shape[:2] != next(iter(views.values())).shape[:2]:
+            raise ValueError('Progressive previews and reference views must share temporal/channel layout')
+        views[dimensions] = frames
+    return views
+
+
 class ObservationPolicy:
     def __init__(self, settings, *, min_progress, interval):
         self.settings = settings.validate(min_progress=min_progress, interval=interval)

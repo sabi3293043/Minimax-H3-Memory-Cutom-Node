@@ -1,5 +1,27 @@
 # Validation status
 
+## Progressive reference continuity (2026-10-20)
+
+- 532 selected CPU/unit tests pass, including retained protected records and
+  frozen regional references across both size changes, higher-detail reference
+  learning, same-scale descriptor comparisons, shared observation capacity,
+  proposal priority/anchor protection, and cancellation after full-size preview.
+- Real installed 2D Tiny VAE inference on CPU exercises three input sizes,
+  retains earlier anchors, learns trusted full-size references, and clears all
+  regional banks. Its 2,446,179 decoder parameters occupy about 4.7 MiB in FP16;
+  this excludes decode activations and framework overhead.
+- A native tiny H3 CFGGuider/Euler fixture completes eight steps with three
+  real Tiny VAE observation sizes and 14 attention corrections. Model/output
+  tensors are verified on CPU; ComfyUI dependency capability probing can still
+  initialize a CUDA context. This is pipeline evidence, not trained-video
+  appearance or performance evidence.
+- Progressive resolution remains off by default, with a tooltip, console
+  warning and status notice describing the speed/quality trade-off. Querying
+  retained scales adds decode work; net speedup and visual consistency require
+  same-workflow video comparisons. No full checkpoint generation was run.
+- Fresh installed-node registration/default checks and 111 focused tests pass;
+  the installed real Tiny VAE passes the same three-scale retention probe.
+
 ## Whole-scene tracking fix (2026-10-20)
 
 - 524 CPU/unit tests pass, including empty-region opt-in, global guidance outside

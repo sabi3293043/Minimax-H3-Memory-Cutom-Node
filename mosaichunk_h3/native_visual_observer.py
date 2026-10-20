@@ -19,7 +19,7 @@ from .visual_memory_disk import VisualMemoryDisk
 from .visual_memory_index import AdaptiveVisualIndex
 from .memory_feedback import retrieve_step_references
 from .native_status import notify_native
-from .observation_policy import ObservationSettings, ObservationPolicy, resize_observation
+from .observation_policy import ObservationSettings, ObservationPolicy, decode_observation_views
 
 TINY_VAE_URL = "https://github.com/madebyollin/taehv/blob/main/safetensors/taeh3.safetensors"
 
@@ -247,6 +247,10 @@ class NativeVisualObserver:
         import torch
         with preserve_observation_rng():
             decoder = _load_tae_decoder(self.tiny_vae_name)
+        if self.observation_settings.progressive_resolution:
+            LOG.warning('[MiniMax H3 Memory] Progressive resolution is an optional speed/quality trade-off: '
+                'smaller early views can miss details and weaken consistency. Matching resolution increases '
+                'with sampling; retained history needs additional same-scale queries. Speedup is workload-dependent.')
         disabled_reason = ''
         if latent_shapes and len(latent_shapes[0]) == 5:
             from .native_guidance import decoded_to_latent, frame_numbers
@@ -279,10 +283,11 @@ class NativeVisualObserver:
                 if not getattr(decoder,'decodes_prefix',False) else f for f in protected)))
         else:
             mapped_protected = protected
-        index = AdaptiveVisualIndex(capacity=self.max_memory_frames,
-                                    captures_per_step=self.max_frames, protected_frames=mapped_protected)
         configured_regions = parse_regions(self.memory_options.regions)
-        region_memory = RegionMemory(configured_regions, mapped_protected)
+        from .progressive_memory import ProgressiveReferenceMemory, merge_references
+        memory = ProgressiveReferenceMemory(capacity=self.max_memory_frames,
+            captures_per_step=self.max_frames, protected_frames=mapped_protected, regions=configured_regions,
+            index_factory=AdaptiveVisualIndex, region_factory=RegionMemory)
         tracking_failed = bool(tracking_error)
         tracking_reason = tracking_error
         inspector = MemoryInspector(enabled=self.memory_options.inspect)
@@ -307,6 +312,7 @@ class NativeVisualObserver:
             observation_seconds = 0.
             peak_cache_bytes = 0
             preview_size = None
+            reference_preview_sizes = ()
             observation_reason = ''
             mode = guidance.config.mode if guidance is not None else 'observe_only'
             label = ('Observation only (guidance inactive)' if guidance is None else
@@ -335,6 +341,10 @@ class NativeVisualObserver:
                 text += f'; {skipped_observations} observation skips'
                 if preview_size is not None:
                     text += f'; preview {preview_size[1]}x{preview_size[0]}'
+                if len(reference_preview_sizes) > 1:
+                    text += f'; {len(reference_preview_sizes)} reference scales'
+                if self.observation_settings.progressive_resolution:
+                    text += '; progressive previews (quality trade-off)'
                 if store is None:
                     text += '; image storage off'
                 if self.memory_options.occlusion:
@@ -348,6 +358,7 @@ class NativeVisualObserver:
                     observation_seconds=observation_seconds, sampling_seconds=time.perf_counter()-sampling_started,
                     peak_cache_bytes=peak_cache_bytes,
                     skipped_observations=skipped_observations, preview_size=preview_size,
+                    reference_preview_sizes=reference_preview_sizes,
                     observation_reason=observation_reason, store_observation_images=store is not None,
                     acceleration=acceleration.metrics() if acceleration is not None else None,
                     disabled_reason=disabled_reason,
@@ -363,6 +374,7 @@ class NativeVisualObserver:
             def observing_callback(step, x0, x, total):
                 nonlocal budget_full, disabled_reason, observations, observation_seconds, peak_cache_bytes
                 nonlocal skipped_observations, preview_size, observation_reason, inspector_entry, tracking_failed, tracking_reason
+                nonlocal reference_preview_sizes
                 if guidance is not None:
                     guidance.progress = (step + 1) / max(1, total)
                 if acceleration is not None:
@@ -386,32 +398,28 @@ class NativeVisualObserver:
                                                                 fingerprint=decision.fingerprint)
                             observation_reason = decision.reason
                             if decision.observe:
-                                if policy.last_size is not None and decision.size != policy.last_size:
-                                    # Decoder outputs at different scales are not calibrated
-                                    # to one descriptor distribution. Rebuild references.
-                                    index.reset(on_evict=delete_record)
-                                    region_memory.clear()
-                                    if guidance is not None:
-                                        guidance.clear_plan()
                                 with preserve_observation_rng():
-                                    preview_video = resize_observation(video[:1], decision.size)
-                                    frames = decoder.decode_video(preview_video, frame_indices=None)
+                                    decoded_views = decode_observation_views(decoder, video,
+                                        size=decision.size, reference_sizes=sorted(memory.views,
+                                            key=lambda size: size[0]*size[1], reverse=True))
+                                frames = decoded_views[decision.size]
                                 observations += 1
                                 preview_size = tuple(frames.shape[-2:])
-                                descriptors = index.descriptors(frames)
+                                reference_preview_sizes = tuple(tuple(f.shape[-2:]) for f in decoded_views.values())
+                                view_features = {size: AdaptiveVisualIndex.descriptors(f)
+                                                 for size, f in decoded_views.items()}
+                                groups = tuple(decoded_to_latent(f,len(frames),guidance.latent_t)
+                                               for f in range(len(frames))) if guidance is not None else tuple(range(len(frames)))
                                 retrieval_options = {}
                                 if guidance is not None and guidance.config.mode == 'retrieved_frames':
-                                    retrieval_options = dict(forward_only=True, frame_groups=tuple(
-                                        decoded_to_latent(frame, len(frames), guidance.latent_t)
-                                        for frame in range(len(frames))))
-                                references = retrieve_step_references(
-                                    descriptors, index.entries, step=step,
-                                    max_references=self.max_frames, **retrieval_options,
-                                )
+                                    retrieval_options = dict(forward_only=True, frame_groups=groups)
+                                batches = [retrieve_step_references(view_features[size], memory.view(size).index.entries,
+                                    step=step, max_references=self.max_frames, **retrieval_options)
+                                    for size in decoded_views]
+                                references = merge_references(batches, groups=groups, count=self.max_frames,
+                                    forward_only=retrieval_options.get('forward_only',False))
                                 if guidance is not None:
                                     guidance.observe(frames, references, step=step, total=total)
-                                    groups = tuple(decoded_to_latent(f,len(frames),guidance.latent_t)
-                                                   for f in range(len(frames)))
                                     global_plans = tuple(RegionPlan(s,t,'whole frame',(0,0,1,1),(0,0,1,1),1.,
                                         next(f for f,g in enumerate(groups) if g==s),
                                         next(f for f,g in enumerate(groups) if g==t),regional=False)
@@ -426,7 +434,7 @@ class NativeVisualObserver:
                                         try:
                                             tracked = tracker.track(frames,configured_regions,
                                                 sources or mapped_protected or (0,))
-                                            region_memory.regions = tracker.regions
+                                            memory.regions = tracker.regions
                                             tracking_reason = tracker.last_reason
                                             tracking_event = dict(region='tracking',reason=tracking_reason)
                                         except Exception as exc:
@@ -437,20 +445,28 @@ class NativeVisualObserver:
                                             tracking_reason = tracking_event['reason']
                                             LOG.warning(tracking_reason)
                                     regional_plans = ()
-                                    region_memory.events = []
-                                    if region_memory.regions and (not self.memory_options.occlusion or tracked is not None):
-                                        regional_plans = region_memory.plan(frames,groups=groups,step=step,
-                                            source_frames=sources,tracked=tracked)
-                                        if guidance.config.mode == 'manual_frames':
-                                            targets = {decoded_to_latent(f,pixel_count,guidance.latent_t)
-                                                       for f in frame_numbers(guidance.config.target_frames)}
-                                            regional_plans = tuple(p for p in regional_plans if p.target in targets)
+                                    region_events, region_keys = [], set()
+                                    for size, reference_frames in decoded_views.items():
+                                        bank = memory.view(size).regions
+                                        bank.regions = memory.regions
+                                        if bank.regions and (not self.memory_options.occlusion or tracked is not None):
+                                            for plan in bank.plan(reference_frames,groups=groups,step=step,
+                                                    source_frames=sources,tracked=tracked):
+                                                key = (plan.source,plan.target,plan.name)
+                                                if key not in region_keys:
+                                                    regional_plans += (plan,)
+                                                    region_keys.add(key)
+                                            region_events.extend(dict(event,reference_size=list(size)) for event in bank.events)
+                                    if guidance.config.mode == 'manual_frames':
+                                        targets = {decoded_to_latent(f,pixel_count,guidance.latent_t)
+                                                   for f in frame_numbers(guidance.config.target_frames)}
+                                        regional_plans = tuple(p for p in regional_plans if p.target in targets)
+                                    # Keep the existing total regional plan budget across all scales.
+                                    regional_plans = regional_plans[:8]
                                     if tracking_event:
-                                        region_memory.events.append(tracking_event)
+                                        region_events.append(tracking_event)
                                     plans = guidance.publish_plans(global_plans,regional_plans)
                                     try:
-                                        groups = tuple(decoded_to_latent(f,len(frames),guidance.latent_t)
-                                                       for f in range(len(frames)))
                                         starts = []
                                         cursor = 0
                                         for index_latent in range(guidance.latent_t):
@@ -459,7 +475,7 @@ class NativeVisualObserver:
                                         video_frames = tuple(starts[g] if len(frames)==guidance.latent_t else f
                                                              for f,g in enumerate(groups))
                                         inspector_entry = inspector.observation(frames,plans,step=step,
-                                            events=region_memory.events,video_frames=video_frames,frame_groups=groups)
+                                            events=region_events,video_frames=video_frames,frame_groups=groups)
                                     except Exception:
                                         LOG.debug('Memory inspector image delivery failed; guidance preserved',exc_info=True)
                                 if guidance is None and self.memory_options.inspect:
@@ -472,18 +488,20 @@ class NativeVisualObserver:
                                         self.feedback_hook(step, tuple(references), read_record)
                                     except Exception:
                                         LOG.warning('Native visual feedback hook failed; sampling unaffected', exc_info=True)
-                                for frame_id, descriptor, confidence in index.candidates(
-                                    frames, step=step, descriptors=descriptors
-                                ):
-                                    record = None
-                                    if store is not None:
-                                        record = store.save(step=step, frame=frame_id,
-                                            data=_to_webp(frames[frame_id]), fmt='webp')
-                                        peak_cache_bytes = max(peak_cache_bytes, store.used_bytes)
-                                    accepted = index.put(step, frame_id, descriptor,
-                                        confidence, record, on_evict=delete_record)
-                                    if not accepted:
-                                        delete_record(record)
+                                for size, reference_frames in decoded_views.items():
+                                    view = memory.view(size)
+                                    for frame_id, descriptor, confidence in view.index.candidates(
+                                        reference_frames, step=step, descriptors=view_features[size]
+                                    ):
+                                        record = None
+                                        if store is not None:
+                                            record = store.save(step=step, frame=frame_id,
+                                                data=_to_webp(reference_frames[frame_id]), fmt='webp')
+                                            peak_cache_bytes = max(peak_cache_bytes, store.used_bytes)
+                                        accepted = memory.put(view,step,frame_id,descriptor,
+                                            confidence,record,on_evict=delete_record)
+                                        if not accepted:
+                                            delete_record(record)
                                 policy.observed(decision, step=step)
                             else:
                                 skipped_observations += 1
@@ -526,6 +544,7 @@ class NativeVisualObserver:
                             settings=settings, seed=seed, inspector=inspector, error=sampling_error,
                             metrics=dict(sampling_seconds=time.perf_counter()-sampling_started,
                                 observations=observations, observation_seconds=observation_seconds,
+                                preview_size=preview_size, reference_preview_sizes=reference_preview_sizes,
                                 tracking=dict(requested=self.memory_options.occlusion,
                                     active=tracker is not None and not tracking_failed,
                                     automatic=not bool(configured_regions),reason=tracking_reason),
@@ -534,7 +553,7 @@ class NativeVisualObserver:
                         notify_native(self.node_id, f'Memory report saved: {path}', report_path=path)
                     except Exception:
                         LOG.warning('Unable to save optional memory report', exc_info=True)
-                region_memory.clear()
+                memory.close()
                 # The context manager also closes on BaseException/cancellation.
                 if store is not None:
                     store.close()
@@ -601,7 +620,7 @@ class MosaiChunkH3NativeVisualObserver:
             "observation_schedule": (["adaptive", "fixed"], {"default": "fixed",
                 "tooltip": "Adaptive: refresh when coarse latent predictions change, with warmup and a maximum refresh interval. Experimental; not an object tracker."}),
             "progressive_resolution": ("BOOLEAN", {"default": False,
-                "tooltip": "Decode smaller observation latents early, then medium and full size. Final video/model attention remain full resolution. Retrieval references rebuild at each size change."}),
+                "tooltip": "Optional speed/quality trade-off: observations and matching increase from the starting scale to full video resolution as sampling progresses. Smaller early views can miss details. Earlier references are preserved and queried at their own scales, adding decode work. Speedup depends on workload. Final video/model attention remain full resolution."}),
             "observation_start_scale": ("FLOAT", {"default": .5, "min": .25, "max": 1., "step": .05}),
             "observation_full_progress": ("FLOAT", {"default": .75, "min": .05, "max": .9, "step": .05,
                 "tooltip": "Reach full observation resolution at this fraction of denoising; must exceed min_progress."}),

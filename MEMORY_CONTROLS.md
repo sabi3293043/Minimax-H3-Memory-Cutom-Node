@@ -71,8 +71,15 @@ before pinning. Choose frames where the entire desired outfit is visible.
 Protected observation descriptors are not replaced after they become trusted
 and cannot be evicted by unprotected records. The region bank waits for two
 stable observations before freezing a small RGB reference. If the source later
-drifts substantially, it withholds propagation and reports the reason. A size
-change rebuilds the bank rather than comparing uncalibrated resolutions.
+drifts substantially, it withholds propagation and reports the reason.
+Progressive previews do not reset these references. Each size has its own
+appearance history, and later stages learn more detailed references. Current
+detailed matches are preferred; retained earlier scales are queried using
+additional current-step decodes at their original sizes. All scales share the
+existing observation/image-record budget. Progressive resolution remains an
+optional, default-off speed/quality trade-off; smaller early views can miss
+detail, later history queries add work, and a net speedup is not guaranteed.
+Normal run cleanup and invalid-observation rejection still apply.
 
 The bank preserves a retrieval reference for this run. It does **not** inject
 stored RGB images or stale attention tensors into the denoiser. Attention still

@@ -1,4 +1,4 @@
-"""Progressive decoder inputs, retrieval rebuilds and storage-independent plans."""
+"""Progressive decoder views, persistent retrieval and storage-independent plans."""
 from pathlib import Path
 import tempfile
 import unittest
@@ -62,15 +62,16 @@ class SpeedIntegrationTests(unittest.TestCase):
         self.assertGreater(disk[2]['peak_cache_bytes'], 0)
         self.assertEqual(descriptors[2]['peak_cache_bytes'], 0)
 
-    def test_adaptive_progressive_decode_grows_and_retrieval_rebuilds(self):
+    def test_adaptive_progressive_decode_grows_without_resetting_retrieval(self):
         sizes, plans, status, resets = self.run_case(images=False, settings=ObservationSettings(
             schedule='adaptive', progressive_resolution=True))
         self.assertEqual(list(dict.fromkeys(sizes)), [(4, 6), (6, 9), (8, 12)])
-        self.assertEqual(len(resets), 2)
-        self.assertLess(len(sizes), 18)
+        self.assertEqual(resets, [])
+        self.assertLess(status['observations'], 18)
         self.assertTrue(any(plans))
         self.assertGreater(status['skipped_observations'], 0)
         self.assertEqual(status['preview_size'], (16, 24))
+        self.assertEqual(status['reference_preview_sizes'], ((16,24),(12,18),(8,12)))
 
 
 if __name__ == '__main__':

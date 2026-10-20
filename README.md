@@ -292,21 +292,43 @@ latents**, before decoding. When enabled, it uses half-sized observations until
 are per-dimension scales: half width/height has approximately a quarter of the
 pixels. Temporal length, sampler latents, model attention and final output
 resolution are unchanged. Spatial rounding and minimum sizes can merge stages
-for very small videos. Smaller previews are approximate and can lose details.
+for very small videos. **Optional speed/quality trade-off:** smaller previews
+can lose details and weaken appearance matching. This remains off by default.
 
 Adaptive mode compares bounded thumbnails of the current latent prediction to
 the last observed prediction. Changes can request an earlier refresh, while
 `adaptive_max_interval` forces periodic refreshes. Each new observation size
-starts with three warmup observations to seed retrieval. This is a prediction-
+starts with three refresh observations to inspect the new preview size, without
+resetting reference history. This is a prediction-
 drift heuristic, not semantic object/occlusion detection; some changes can be
 missed. The threshold is exploratory and not a trained quality calibration.
 
-At a resolution change, the RGB retrieval index is rebuilt and stale frame-pair
-plans are cleared. Cross-resolution descriptors are not assumed comparable.
-Automatic guidance may pause while the new stage gathers observations. Short
-four-step schedules can have too little history; begin with your usual longer
-schedule and compare against fixed/full mode. The full-resolution pixel budget
-is still checked before sampling, even when early previews are smaller.
+Reference matching grows with the observations: later stages learn their own
+more detailed RGB references. Earlier global and frozen regional references
+remain available across preview-size changes. Each retained resolution is
+queried using a current-step decode at that **same decoder input size**;
+resizing decoded RGB alone is not treated as decoder-scale calibration. Current
+detailed matches are preferred, with earlier-scale proposals filling remaining
+slots while new references settle. Cross-scale proposals cannot double-correct
+a target or turn an anchor into a target in the same evaluation.
+
+Protected records are not evicted just because a larger preview starts. All
+scales share the existing `max_memory_frames` observation/image-record budget
+and total frame-pair/region plan limits. Frozen regional descriptors have at
+most three bounded scale-specific banks; normal capacity eviction, source-drift
+rejection and error/cancellation cleanup still apply. If a small budget is
+already filled by protected references, additional global records are declined
+rather than removing protected history.
+
+Querying retained scales adds decode work in later stages, so a net speedup is
+workload-dependent. The largest current preview supplies tracking and inspector
+images. Completed multi-scale RGB views are moved to CPU RAM before decoding
+another scale; temporary observation RAM can increase, while persistent
+references remain compact descriptors. Native attention guidance still uses
+full-resolution model features throughout. Short four-step schedules can have
+too little history; compare against fixed/full
+mode on the same workflow and seed. The full-resolution pixel budget is still
+checked before sampling, even when early previews are smaller.
 
 Disabling image storage keeps bounded descriptors in RAM and avoids WebP
 encoding, image writes and cache-directory creation. It does **not** disable
@@ -314,8 +336,9 @@ retrieval or guidance. Diagnostic hooks cannot read image files in this mode.
 Synthetic native sampling tests show bit-exact output when toggling storage
 alone; adaptive cadence and resolution can alter guidance and quality.
 
-Status reports skipped observations and the latest preview dimensions. The
-observation timer includes scheduling overhead. These options reduce observation
+Status reports skipped observations, preview dimensions, and the number of
+retained reference scales. The
+observation timer includes scheduling overhead. These options change observation
 work, not the number of H3 evaluations; Spectrum forecasting remains disabled
 with active guidance. End-to-end GPU speed and trained-video quality need A/B
 testing. Set `observation_schedule=fixed`, `progressive_resolution=false` and

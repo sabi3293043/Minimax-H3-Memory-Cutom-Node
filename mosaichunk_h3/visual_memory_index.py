@@ -59,7 +59,7 @@ class AdaptiveVisualIndex:
             return torch.cat(parts, dim=0)
 
     def reset(self, *, on_evict):
-        """Do not compare RGB descriptors across different decoder resolutions."""
+        """Explicitly discard a run's references; progressive stages do not reset them."""
         for entry in self.entries:
             on_evict(entry.record)
         self.entries.clear()
