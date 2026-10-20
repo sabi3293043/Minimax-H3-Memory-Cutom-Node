@@ -317,8 +317,48 @@ values or saved comparison files. The MODEL sockets and sampler wiring stay the
 same; no separate compare node or sampler is required. Turning only
 `second_pass_comparison` off keeps the ordinary single retained-result preview
 and avoids a separately encoded/stored before view. Older workflows keep this
-toggle off. Set `memory_preview=off` to disable all memory preview encoding
-and delivery.
+toggle off. Set `memory_preview=off` to hide the built-in player and disable its
+JPEG encoding/delivery. With comparison enabled, the bounded CPU output capture
+remains available for an external compare node.
+
+### External IMAGE comparison outputs
+
+The MODEL node executes before generation, so it cannot directly return IMAGE
+tensors created later by a sampler. Its added **comparison** socket carries a
+per-MODEL capture handle. The existing **model** output stays at index 0 so
+current sampler connections remain compatible. Add **MiniMax H3 Memory —
+Comparison Outputs** and connect:
+
+1. Memory **comparison** → Comparison Outputs **comparison**.
+2. The same sampler's **output** LATENT → Comparison Outputs **samples**.
+3. Comparison Outputs **before** and **after_attempt** → your compare node's
+   two IMAGE inputs. **retained** is the result actually selected by repair;
+   **status** explains acceptance, rejection, skipping or failure.
+
+Both **Second-pass repair** and **Before/After comparison** must be on. A
+comparison request with second pass off now fails clearly before model work.
+The collector's LATENT dependency ensures it reads after sampling. Use the
+sampler's ordinary **output**, before video/audio splitting, rather than
+**denoised_output**, input latents or another branch. The collector checks an
+exact signature of both sampled streams and rejects mismatched results. Use a
+separate memory node for each sampler/comparison branch.
+
+Output IMAGE batches use the same bounded temporal selection and maximum
+resolution controls as preview, from the existing Tiny VAE inspection/evaluation
+RGB. They are CPU float images, not full-resolution final VAE frames or audio.
+The capture stores bounded uint8 RGB; conversion to IMAGE floats, resizing and
+signature checks have CPU/RAM/transfer overhead, but perform no model/VAE work.
+Capture remains usable with `memory_preview=off` to avoid the built-in player.
+Comparison off stores no extra output images. Each new sampling run replaces
+the prior capture, and interruption/uncaught sampling error clears it. There is no global frame
+history or comparison file accumulation.
+
+Rejected repairs keep their attempted after frames for diagnosis; **retained**
+equals **before**. When repair is skipped or fails before an after prediction
+exists, external **after_attempt** equals **before**, and **status** explicitly
+reports that no attempt is available. This allows IMAGE comparison nodes to
+show an unchanged pair without failing an otherwise valid generation. The
+built-in player continues to show the corresponding explanatory message.
 
 ## Compatibility and reports
 

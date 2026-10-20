@@ -304,7 +304,14 @@ def execute_second_pass(observer, executor, noise, latent_image, sampler, sigmas
     options = observer.memory_options
     comparison = RepairComparison(observer.node_id,enabled=options.preview!='off' and options.compare_repair,
         frames=options.preview_frames,max_resolution=options.preview_resolution,fps=options.preview_fps)
-    def finish_preview(after=None,*,outcome,caption):
+    capture = observer.comparison_capture
+    def finish_preview(after=None,*,outcome,caption,result):
+        if capture is not None and capture.enabled:
+            try:
+                capture.finish(after,outcome=outcome,result=result,latent_shapes=latent_shapes,caption=caption)
+            except Exception as exc:
+                capture.reset(f'Comparison output capture failed: {type(exc).__name__}: {str(exc)[:180]}')
+                LOG.warning('Comparison output unavailable; sampled result preserved',exc_info=True)
         if comparison.enabled:
             comparison.finish(after,outcome=outcome,caption=caption)
             return
@@ -336,6 +343,12 @@ def execute_second_pass(observer, executor, noise, latent_image, sampler, sigmas
             if pixels > observer.max_observation_megapixels*1e6:
                 raise ValueError('Second-pass inspection exceeds max_observation_megapixels')
             frames = decoder.decode_video(video[:1],frame_indices=None).cpu()
+        if capture is not None and capture.enabled:
+            try:
+                capture.start(frames)
+            except Exception as exc:
+                capture.reset(f'Comparison first-pass capture failed: {type(exc).__name__}: {str(exc)[:180]}')
+                LOG.warning('Comparison output unavailable; sampling preserved',exc_info=True)
         comparison.start(frames)
         protected = frame_numbers(observer.memory_options.protected_frames)
         final_count = sum(1 if i%5==0 else 4 for i in range(latent_shapes[0][2]))
@@ -367,7 +380,7 @@ def execute_second_pass(observer, executor, noise, latent_image, sampler, sigmas
                 regions = tracker.regions
                 metrics['tracking'] = tracker.last_metrics
             if not regions:
-                finish_preview(outcome='skipped',caption='Original retained · no confident tracked objects · silent Tiny VAE preview')
+                finish_preview(outcome='skipped',result=baseline,caption='Original retained · no confident tracked objects · silent Tiny VAE preview')
                 status('Second pass skipped: no confident tracked objects; original video retained',finished=True)
                 return baseline
         plan = build_repair_plan(frames,latent_shapes[0],settings,sources=sources,targets=targets,
@@ -389,7 +402,7 @@ def execute_second_pass(observer, executor, noise, latent_image, sampler, sigmas
         metrics.update(steps=steps,area=plan.area,severity=plan.severity,score_before=before,
                        candidates=len(plan.plans),reason=getattr(plan,'reason','bounded repair proposal'))
         if not steps:
-            finish_preview(outcome='skipped',caption='Original retained · no confident repair candidates · silent Tiny VAE preview')
+            finish_preview(outcome='skipped',result=baseline,caption='Original retained · no confident repair candidates · silent Tiny VAE preview')
             status(f'Second pass skipped: {metrics["reason"]}; original video retained',finished=True)
             return baseline
         status(f'Second pass: {steps} masked repair steps ({metrics["mode"]}); model still processes full context')
@@ -448,7 +461,7 @@ def execute_second_pass(observer, executor, noise, latent_image, sampler, sigmas
         # SamplerCustomAdvanced also exposes denoised_output: keep its x0 callback
         # consistent with the actually accepted/restored output, including audio scale.
         finalize(final,steps)
-        finish_preview(after_frames,outcome='accepted' if accepted else 'rejected',caption=
+        finish_preview(after_frames,result=final,outcome='accepted' if accepted else 'rejected',caption=
             ('Repair accepted · saving after' if accepted else 'Repair rejected · saving before')+' · silent Tiny VAE preview')
         status('Second pass accepted: reference metric improved; visual quality needs inspection' if accepted
                else 'Second pass rejected: reference metric did not improve safely; original video retained',finished=True)
@@ -458,7 +471,7 @@ def execute_second_pass(observer, executor, noise, latent_image, sampler, sigmas
         if isinstance(exc,InterruptProcessingException) or callback_failed:
             raise
         metrics['accepted'] = False
-        finish_preview(outcome='failed',caption='Repair failed · original retained · silent Tiny VAE preview')
+        finish_preview(outcome='failed',result=baseline,caption='Repair failed · original retained · silent Tiny VAE preview')
         status(f'Second pass failed: {type(exc).__name__}: {str(exc)[:140]}; original video retained',
                finished=True,error=str(exc)[:300])
         return finalize(baseline,metrics['steps'] or len(sigmas)-1)

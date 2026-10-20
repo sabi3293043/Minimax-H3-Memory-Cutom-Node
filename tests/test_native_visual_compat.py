@@ -47,7 +47,9 @@ class NativeCompositionTests(unittest.TestCase):
         with patch.dict(sys.modules, {"comfy": comfy, "comfy.patcher_extension": ext}):
             model = FakePatcher()
             override = model.model_options["transformer_options"]["optimized_attention_override"]
-            output, = MosaiChunkH3NativeVisualObserver().apply(model, "auto")
+            output, comparison = MosaiChunkH3NativeVisualObserver().apply(model, "auto")
+            self.assertEqual(MosaiChunkH3NativeVisualObserver.RETURN_NAMES,('model','comparison'))
+            self.assertIs(output.get_wrappers('outer_sample',KEY)[0].comparison_capture,comparison)
             self.assertIs(
                 output.model_options["transformer_options"]["optimized_attention_override"],
                 override,

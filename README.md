@@ -35,6 +35,13 @@ Enable the optional **Before/After comparison** toggle (off by default), with
 second-pass repair and preview enabled, for synchronized playback in this same
 node, including a labelled rejected attempt. It reuses
 already-decoded Tiny VAE frames and does not require a separate comparison node.
+Both **Second-pass repair** and **Before/After comparison** must be on. The
+invalid combination now fails before sampling, instead of silently producing no
+comparison. For external IMAGE comparison, connect the memory node's new
+**comparison** socket and the same sampler's **output** LATENT to
+**MiniMax H3 Memory — Comparison Outputs**. Its **before** and **after_attempt**
+IMAGE outputs connect to your compare node; **retained** shows the selected
+result. See [comparison wiring](MEMORY_CONTROLS.md#external-image-comparison-outputs).
 
 ## Legacy RAVEN chunk backend
 

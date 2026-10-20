@@ -23,6 +23,9 @@ from mosaichunk_h3.mc_nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPIN
 from mosaichunk_h3.native_visual_observer import MosaiChunkH3NativeVisualObserver
 NODE_CLASS_MAPPINGS["MosaiChunkH3NativeVisualObserver"] = MosaiChunkH3NativeVisualObserver
 NODE_DISPLAY_NAME_MAPPINGS["MosaiChunkH3NativeVisualObserver"] = "MiniMax H3 Memory — Native Visual Observer (experimental)"
+from mosaichunk_h3.comparison_output import MiniMaxH3ComparisonOutputs
+NODE_CLASS_MAPPINGS['MiniMaxH3ComparisonOutputs'] = MiniMaxH3ComparisonOutputs
+NODE_DISPLAY_NAME_MAPPINGS['MiniMaxH3ComparisonOutputs'] = 'MiniMax H3 Memory — Comparison Outputs'
 
 WEB_DIRECTORY = "./web"
 

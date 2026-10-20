@@ -48,6 +48,8 @@ class SecondPassLifecycleTests(unittest.TestCase):
             guidance=GuidanceConfig(mode='manual_frames',layers='0',target_frames='5'),
             node_id='test' if preview else None,
             memory_options=MemoryOptions(preview='auto' if preview else 'off',inspect=True,compare_repair=comparison),second_pass=SecondPassSettings(enabled=True,steps=4))
+        from mosaichunk_h3.comparison_output import ComparisonCapture
+        observer.comparison_capture=ComparisonCapture(enabled=comparison)
         mask=torch.zeros(1,1,3,4,4);mask[:,:,2,2:,2:]=1
         plan=SimpleNamespace(mask=mask,plans=() if empty else (RegionPlan(0,2,'test',(0,0,1,1),(.5,.5,1,1),1.,0,2),),
             area=0. if empty else float(mask.mean()),severity=.2,
@@ -75,6 +77,7 @@ class SecondPassLifecycleTests(unittest.TestCase):
                 self.assertEqual(guider.model_options,original)
         self.preview_events=[call.kwargs for call in preview_send.call_args_list]
         self.decoder_calls=decoder.decode_video.call_count
+        self.capture=observer.comparison_capture
         return result,baseline,mask,guider.calls,outputs,events
 
     def test_before_after_preview_uses_only_existing_inspection_and_evaluation_decodes(self):
@@ -100,6 +103,16 @@ class SecondPassLifecycleTests(unittest.TestCase):
             self.assertNotIn('comparison',self.preview_events[0])
             self.assertTrue(self.preview_events[0]['frames'])
         self.run_repair(comparison=True,preview=False)
+        self.assertEqual(self.preview_events,[])
+
+    def test_comparison_outputs_remain_available_with_builtin_player_off(self):
+        output,*_=self.run_repair(comparison=True,preview=False)
+        from mosaichunk_h3.comparison_output import MiniMaxH3ComparisonOutputs
+        streams=comfy.utils.unpack_latents(output,[(1,24,3,4,4),(1,32,2,5)])
+        before,after,retained,note=MiniMaxH3ComparisonOutputs().collect(self.capture,{'samples':NestedTensor(streams)})
+        self.assertEqual(before.shape,after.shape)
+        self.assertEqual(before.shape[-1],3)
+        self.assertEqual(self.decoder_calls,2)
         self.assertEqual(self.preview_events,[])
 
     def test_masked_output_and_audio_are_preserved_and_x0_agrees(self):

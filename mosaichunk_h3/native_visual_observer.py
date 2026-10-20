@@ -151,7 +151,7 @@ class NativeVisualObserver:
                  guidance=None, max_observation_megapixels=64.,
                  observation_interval=1, node_id=None, observation_settings=None,
                  store_observation_images=True, acceleration=None, memory_options=None,
-                 check_skipping=None, second_pass=None):
+                 check_skipping=None, second_pass=None,comparison_capture=None):
         if not 1 <= int(max_frames) <= 64:
             raise ValueError("max_frames must be between 1 and 64")
         if not 1 <= int(max_memory_frames) <= 256:
@@ -189,10 +189,13 @@ class NativeVisualObserver:
             self.observation_settings,self.observation_interval)
         self.observation_settings.validate(min_progress=self.min_progress,interval=self.observation_interval)
         self.defer_observation = False
+        self.comparison_capture = comparison_capture
 
     def __call__(self, executor, noise, latent_image, sampler, sigmas,
                  denoise_mask=None, callback=None, disable_pbar=False,
                  seed=None, latent_shapes=None):
+        if self.comparison_capture is not None:
+            self.comparison_capture.reset('Comparison is pending; connect the matching completed sampler output.')
         try:
             with ExitStack() as stack:
                 shared = None
@@ -210,6 +213,8 @@ class NativeVisualObserver:
                 return self._call(executor, noise, latent_image, sampler, sigmas,
                     denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes,shared=shared)
         except BaseException as exc:
+            if self.comparison_capture is not None:
+                self.comparison_capture.reset(f'Comparison unavailable after interruption/error: {type(exc).__name__}')
             notify_native(self.node_id, f'Stopped: {type(exc).__name__}: {str(exc)[:160]}',
                           log=True, state='stopped')
             raise
@@ -665,8 +670,8 @@ class MosaiChunkH3NativeVisualObserver:
         "use CFG 1. Active guidance disables Spectrum forecasting. Quality is unvalidated. "
         "Recommended decoder: " + TINY_VAE_URL
     )
-    RETURN_TYPES = ("MODEL",)
-    RETURN_NAMES = ("model",)
+    RETURN_TYPES = ("MODEL", "MINIMAX_H3_COMPARISON")
+    RETURN_NAMES = ('model','comparison')
     FUNCTION = "apply"
 
     @classmethod
@@ -780,7 +785,7 @@ class MosaiChunkH3NativeVisualObserver:
             "second_pass_max_area": ("FLOAT", {"default": .20,"min": .01,"max": .50,"step": .01,
                 "tooltip": "Maximum fraction of video latents eligible for repair. Source/reference frames remain protected. This limits changes, not transformer computation."}),
             "second_pass_comparison": ("BOOLEAN", {"default": False,
-                "tooltip": "Optional synchronized Before/After playback in this node during second-pass repair. Requires second_pass and memory_preview=auto. Reuses existing decoded RGB; adds bounded CPU JPEG/browser memory, no extra VAE or model work. Off keeps the ordinary retained-result preview."}),
+                "tooltip": "Capture Before/After frames and enable optional synchronized playback during second-pass repair. Requires second_pass. Connect the comparison socket and matching sampler output to Comparison Outputs for IMAGE sockets. memory_preview=off hides the built-in player but keeps output capture. Reuses existing RGB; adds bounded CPU/browser memory, no extra VAE/model work."}),
         }, "hidden": {"unique_id": "UNIQUE_ID"}}
 
     def apply(self, model, tiny_vae_name, max_frames=8, min_progress=0.25,
@@ -813,6 +818,9 @@ class MosaiChunkH3NativeVisualObserver:
         skipping = CheckSkipping(bool(skip_consistency_checks),bool(auto_check_skipping),checks_to_skip).validate()
         repair = SecondPassSettings(bool(second_pass),bool(auto_second_pass_steps),second_pass_steps,
             second_pass_max_steps,float(second_pass_strength),float(second_pass_threshold),float(second_pass_max_area)).validate()
+        if second_pass_comparison and not repair.enabled:
+            raise ValueError('Before/After comparison requires Second-pass repair ON. Enable it, '
+                'or turn Before/After comparison OFF to use normal per-step memory.')
         memory = MemoryOptions(regions=memory_regions,protected_frames=protected_frames,
             inspect=bool(memory_inspector),export_report=bool(export_memory_report),
             occlusion=bool(occlusion_aware_matching),preset=memory_preset,
@@ -842,6 +850,9 @@ class MosaiChunkH3NativeVisualObserver:
         if model.get_wrappers(WrappersMP.OUTER_SAMPLE, KEY):
             raise ValueError("Apply Native H3 Visual Observer only once")
         result = model.clone()
+        from .comparison_output import ComparisonCapture
+        comparison_capture = ComparisonCapture(enabled=bool(second_pass_comparison),
+            frames=memory.preview_frames,resolution=memory.preview_resolution)
         result.add_wrapper_with_key(WrappersMP.OUTER_SAMPLE, KEY, NativeVisualObserver(
             tiny_vae_name=tiny_vae_name, max_frames=max_frames,
             min_progress=min_progress, disk_gib=disk_gib,
@@ -853,11 +864,11 @@ class MosaiChunkH3NativeVisualObserver:
                 start_scale=float(observation_start_scale), full_progress=float(observation_full_progress),
                 change_threshold=float(adaptive_change_threshold), max_interval=int(adaptive_max_interval)),
             store_observation_images=store_observation_images, acceleration=acceleration, memory_options=memory,
-            check_skipping=skipping,second_pass=repair
+            check_skipping=skipping,second_pass=repair,comparison_capture=comparison_capture
         ))
         if guidance.enabled:
             # Own the execution scope before Spectrum starts a runtime, regardless
             # of whether the user connected this node before or after Spectrum.
             outer = result.wrappers[WrappersMP.OUTER_SAMPLE]
             result.wrappers[WrappersMP.OUTER_SAMPLE] = {KEY: outer[KEY], **{k: v for k, v in outer.items() if k != KEY}}
-        return (result,)
+        return (result,comparison_capture)

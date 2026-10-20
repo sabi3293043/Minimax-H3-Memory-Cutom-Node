@@ -1,5 +1,30 @@
 # Validation status
 
+## Comparison sockets and prerequisites (2026-10-20)
+
+- Read-only inspection of the two recent successful local jobs found
+  `second_pass_comparison=true` and `second_pass=false`. Their logs showed
+  ordinary per-step guidance. No post-generation repair or comparison capture
+  ran. This incompatible selection now produces an actionable preflight error.
+- 614 selected CPU/unit tests pass. Added tests cover real IMAGE tensors,
+  retained/rejected/no-attempt semantics, bounded CPU storage, independent
+  readers, exact video/audio signature checks, wrong-result rejection, clearing
+  after sampling failure, lazy dependency ordering and the invalid flag pair.
+- A real Comfy PromptExecutor graph with a synthetic CPU sampler exercises the
+  MODEL/comparison outputs, sampler LATENT dependency, collector IMAGE outputs,
+  an IMAGE consumer, cached sampler reuse and a changed seed. It tests graph
+  scheduling/caching rather than trained generation.
+- Actual tiny native H3 CPU sampling exercises IMAGE collection after accepted
+  and rejected repairs, including external output capture with the built-in
+  player off. Comparison on/off sampler results remain bit-exact. Other native
+  sampler, conditioning, wrapper and cancellation contracts still pass. Planner
+  proposals/acceptance are forced in this native control-flow probe.
+- Real Comfy browser checks verify the added memory socket, preservation of
+  MODEL output 0, migration of a saved MODEL-only node, collector inputs and IMAGE
+  connections to preview nodes, alongside synchronized playback. No new console
+  errors occur after isolated fixture startup. No trained GPU generation or
+  extra model/VAE download is involved in this revision.
+
 ## Synchronized second-pass comparison (2026-10-20)
 
 - 605 selected CPU/unit tests pass. Tests verify aligned bounded JPEG frame
