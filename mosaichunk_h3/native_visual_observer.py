@@ -623,7 +623,7 @@ class MosaiChunkH3NativeVisualObserver:
                 "tooltip": "Optional speed/quality trade-off: observations and matching increase from the starting scale to full video resolution as sampling progresses. Smaller early views can miss details. Earlier references are preserved and queried at their own scales, adding decode work. Speedup depends on workload. Final video/model attention remain full resolution."}),
             "observation_start_scale": ("FLOAT", {"default": .5, "min": .25, "max": 1., "step": .05}),
             "observation_full_progress": ("FLOAT", {"default": .75, "min": .05, "max": .9, "step": .05,
-                "tooltip": "Reach full observation resolution at this fraction of denoising; must exceed min_progress."}),
+                "tooltip": "Sampling progress when observations reach 100% of the video's resolution. 0.75 means after 75% of sampling (around step 15 of 20), leaving the final 25% at full resolution. This is timing, not a resolution scale. Must exceed min_progress."}),
             "adaptive_change_threshold": ("FLOAT", {"default": .04, "min": .001, "max": 1., "step": .005}),
             "adaptive_max_interval": ("INT", {"default": 3, "min": 1, "max": 100,
                 "tooltip": "Maximum callbacks between adaptive observations; must be at least observation_interval. Initial observations at each size seed retrieval."}),

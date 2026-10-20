@@ -240,6 +240,8 @@ app.registerExtension({
       const result = original?.apply(this,args)
       const data = state(this)
       for (const control of this.widgets ?? []) {
+        if (control.name === 'observation_full_progress') control.label = 'Full resolution at sampling progress'
+        if (control.name === 'observation_start_scale') control.label = 'Starting resolution scale'
         const previous = control.callback
         control.callback = (...values) => {
           previous?.apply(control,values)
