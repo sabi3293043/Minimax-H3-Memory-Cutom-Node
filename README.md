@@ -1,6 +1,30 @@
-# MiniMax H3 Memory Custom Node
+# MiniMax H3 Memory — Experiment (No Demonstrated Benefit)
 
-## Start here: native memory with your existing H3 model
+**This was an experiment to find out whether an added memory/repair node could
+improve MiniMax H3 video consistency. No added memory or consistency benefit has
+been demonstrated in our tests.**
+
+MiniMax H3 already appeared very consistent in our informal tests. It maintained
+characters, outfits and scene details through occlusion, and handled subjects
+leaving the frame and returning. In that practical sense, it already showed
+good "memory" within a video, without our node applying repairs. This describes
+observed visual consistency, rather than a claim about a separate memory system
+inside H3 or a guarantee for every clip.
+
+**This node can look like it does nothing.** In our recent second-pass tests,
+the detector proposed no confident repairs, no repair steps ran, and the
+original MiniMax result was retained. That can mean the result was already
+consistent, or that the experimental detector missed a change. Neither outcome
+demonstrates an improvement from this node.
+
+The native observer/repair path is a heuristic experiment, not a validated
+reproduction of the trained MosaiChunk memory system. Passing implementation
+tests establishes execution and compatibility; it does not establish better
+identity, outfit or scene consistency. The project remains public as a record
+of the experiment, with its limitations stated openly. Treat its features as
+experimental tools, not a proven upgrade or a necessary addition to H3.
+
+## Optional setup for experimenting with your existing H3 model
 
 Search **memory** and add **MiniMax H3 Memory — Native Visual Observer
 (experimental)**. Connect your existing UNET/LoRA chain to its MODEL input, then
