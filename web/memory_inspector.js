@@ -11,7 +11,8 @@ const advanced = new Set(['memory_regions', 'sol_tau', 'acceleration_start', 'ac
   'cache_threshold', 'cache_max_reuse', 'cache_vram_gib', 'cache_storage', 'cache_ram_gib',
   'cache_transfer_mib', 'adaptive_sol', 'sol_stable_boost', 'sol_drift_threshold',
   'adaptive_change_threshold', 'adaptive_max_interval', 'observation_start_scale',
-  'observation_full_progress', 'max_observation_megapixels', 'disk_gib'])
+  'observation_full_progress', 'max_observation_megapixels', 'disk_gib', 'occlusion_cpu_threads',
+  'share_tiny_vae_frames','memory_preview_frames','memory_preview_resolution','memory_preview_fps'])
 
 function widget(node, name) { return node.widgets?.find(w => w.name === name) }
 function state(node) {
@@ -242,6 +243,7 @@ app.registerExtension({
       for (const control of this.widgets ?? []) {
         if (control.name === 'observation_full_progress') control.label = 'Full resolution at sampling progress'
         if (control.name === 'observation_start_scale') control.label = 'Starting resolution scale'
+        if (control.name === 'occlusion_cpu_threads') control.label = 'Tracking CPU threads (0 = all)'
         const previous = control.callback
         control.callback = (...values) => {
           previous?.apply(control,values)

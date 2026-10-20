@@ -1,5 +1,31 @@
 # Validation status
 
+## Shared Tiny VAE frames, standalone preview and CPU budgets (2026-10-20)
+
+- 555 selected CPU/unit tests pass, including exact input/weight invalidation,
+  partial frame requests, independent returned tensors, small cache budgets,
+  cross-thread and nested-session isolation, hook restoration and CPU affinity.
+- Actual native tiny H3 sampling with KJ Preview Override passes on CPU and
+  CUDA, in both outer-wrapper orders. Six callbacks decode 42 frames and reuse
+  35; sampler output is bit-exact against sharing disabled for this fixture.
+  No shared CPU frames remain after callbacks; cancellation restores hooks and
+  model options. The GPU test covers FP16 channels-last singleton weights.
+- When KJ uses the same Tiny VAE, its full-resolution frames drive memory even
+  if progressive observation is selected. Without KJ, native three-size
+  progressive sampling still passes with retained references and guidance.
+- Real ComfyUI frontend checks pass play/pause, frame scrubbing, external-preview
+  hiding, default Auto CPU threads, shared decoding and unchanged serialization.
+  No new browser errors occur after the isolated fixture finishes startup.
+- The 5900X CPU benchmark uses six fixed generated-video frames, one source
+  region, one untimed warmup and three timed refreshes per thread limit. Median
+  refreshes: 2 threads 31.37 s; 8 threads 12.28 s; 12 threads 11.27 s; 24 threads
+  9.53 s. All 32x32 masks, visibility flags and tracked boxes match exactly.
+  No GPU was initialized for this benchmark. This establishes about 3.3x faster
+  tracking for that input, not a whole-video speedup or a universal thread optimum.
+- These tests use a tiny H3 fixture and a previously generated video for tracking;
+  no full-checkpoint generation or end-to-end quality/performance comparison was
+  run. Unsupported decoder APIs/formats intentionally bypass frame sharing.
+
 ## Progressive reference continuity (2026-10-20)
 
 - 532 selected CPU/unit tests pass, including retained protected records and

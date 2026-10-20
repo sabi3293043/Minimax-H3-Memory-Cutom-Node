@@ -12,9 +12,26 @@ class MemoryOptions:
     export_report: bool = False
     occlusion: bool = False
     preset: str = 'Custom'
+    cpu_threads: int = 0
+    share_frames: bool = True
+    preview: str = 'auto'
+    preview_frames: int = 16
+    preview_resolution: int = 512
+    preview_fps: float = 8.
 
     def validate(self):
         from .native_guidance import frame_numbers
+        from .cpu_threads import validate_cpu_threads
+        validate_cpu_threads(self.cpu_threads)
+        import math
+        if self.preview not in ('auto','off'):
+            raise ValueError('Unknown memory_preview mode')
+        if not isinstance(self.preview_frames,int) or not 1<=self.preview_frames<=64:
+            raise ValueError('memory_preview_frames must be 1..64')
+        if not isinstance(self.preview_resolution,int) or not 64<=self.preview_resolution<=1024:
+            raise ValueError('memory_preview_resolution must be 64..1024')
+        if not math.isfinite(self.preview_fps) or not 1<=self.preview_fps<=30:
+            raise ValueError('memory_preview_fps must be 1..30')
         parse_regions(self.regions)
         if len(frame_numbers(self.protected_frames)) > 8:
             raise ValueError('Protect at most eight frames')

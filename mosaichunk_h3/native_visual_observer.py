@@ -19,7 +19,7 @@ from .visual_memory_disk import VisualMemoryDisk
 from .visual_memory_index import AdaptiveVisualIndex
 from .memory_feedback import retrieve_step_references
 from .native_status import notify_native
-from .observation_policy import ObservationSettings, ObservationPolicy, decode_observation_views
+from .observation_policy import ObservationSettings, ObservationPolicy, decode_observation_views, resize_observation
 
 TINY_VAE_URL = "https://github.com/madebyollin/taehv/blob/main/safetensors/taeh3.safetensors"
 
@@ -120,6 +120,11 @@ def _load_tae_decoder(name):
     decoder = module.load_tiny_vae_decoder(name)
     if decoder is None or decoder.latent_channels != 24:
         raise ValueError("Select a 24-channel MiniMax H3 TAEH3 decoder in models/vae_approx")
+    decoder._minimax_tiny_vae_name = name
+    from .shared_tiny_vae import current_session
+    shared = current_session()
+    if shared is not None:
+        shared.register(type(decoder))
     return decoder
 
 
@@ -180,8 +185,16 @@ class NativeVisualObserver:
                  denoise_mask=None, callback=None, disable_pbar=False,
                  seed=None, latent_shapes=None):
         try:
-            return self._call(executor, noise, latent_image, sampler, sigmas,
-                denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes)
+            with ExitStack() as stack:
+                shared = None
+                if self.memory_options.share_frames:
+                    from .shared_tiny_vae import SharedTinyVAE,install_shared_callback
+                    shared = stack.enter_context(SharedTinyVAE(max_bytes=int(self.max_observation_megapixels*1e6*6)))
+                    guider = getattr(executor,'class_obj',None)
+                    if guider is not None and hasattr(guider,'model_options'):
+                        stack.enter_context(install_shared_callback(guider,shared))
+                return self._call(executor, noise, latent_image, sampler, sigmas,
+                    denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes,shared=shared)
         except BaseException as exc:
             notify_native(self.node_id, f'Stopped: {type(exc).__name__}: {str(exc)[:160]}',
                           log=True, state='stopped')
@@ -189,12 +202,12 @@ class NativeVisualObserver:
 
     def _call(self, executor, noise, latent_image, sampler, sigmas,
               denoise_mask=None, callback=None, disable_pbar=False,
-              seed=None, latent_shapes=None):
+              seed=None, latent_shapes=None, shared=None):
         guided = self.guidance is not None and self.guidance.enabled
         accelerated = self.acceleration is not None and self.acceleration.mode != 'off'
         if not guided and not accelerated:
             return self._sample(executor, noise, latent_image, sampler, sigmas,
-                denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes)
+                denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes,shared=shared)
         from .native_guidance import GuidanceSession, install_guidance
         from .generation_acceleration import install_acceleration
         guider = getattr(executor, 'class_obj', None)
@@ -226,14 +239,14 @@ class NativeVisualObserver:
                     from .occlusion_tracking import OcclusionTracker
                     with preserve_observation_rng():
                         root = ensure_installed(progress=lambda message: notify_native(self.node_id, message, log=True))
-                        tracker = stack.enter_context(OcclusionTracker(root))
+                        tracker = stack.enter_context(OcclusionTracker(root,cpu_threads=self.memory_options.cpu_threads))
                 except Exception as exc:
                     tracking_error = f'Tracking unavailable: {type(exc).__name__}: {str(exc)[:120]}; whole-frame memory continues'
                     LOG.warning(tracking_error)
             try:
                 return self._sample(executor, noise, latent_image, sampler, sigmas,
                     denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes,
-                    guidance=session, acceleration=acceleration, tracker=tracker, tracking_error=tracking_error)
+                    guidance=session, acceleration=acceleration, tracker=tracker, tracking_error=tracking_error,shared=shared)
             finally:
                 if session is not None:
                     LOG.warning('Native Tiny VAE correction: %d observations, %d frame-pair proposals, '
@@ -243,14 +256,10 @@ class NativeVisualObserver:
 
     def _sample(self, executor, noise, latent_image, sampler, sigmas,
                 denoise_mask=None, callback=None, disable_pbar=False,
-                seed=None, latent_shapes=None, guidance=None, acceleration=None, tracker=None, tracking_error=''):
+                seed=None, latent_shapes=None, guidance=None, acceleration=None, tracker=None, tracking_error='',shared=None):
         import torch
         with preserve_observation_rng():
             decoder = _load_tae_decoder(self.tiny_vae_name)
-        if self.observation_settings.progressive_resolution:
-            LOG.warning('[MiniMax H3 Memory] Progressive resolution is an optional speed/quality trade-off: '
-                'smaller early views can miss details and weaken consistency. Matching resolution increases '
-                'with sampling; retained history needs additional same-scale queries. Speedup is workload-dependent.')
         disabled_reason = ''
         if latent_shapes and len(latent_shapes[0]) == 5:
             from .native_guidance import decoded_to_latent, frame_numbers
@@ -305,11 +314,35 @@ class NativeVisualObserver:
                                    interval=self.observation_interval)
         storage = (VisualMemoryDisk(self.temp_root, max_bytes=int(self.disk_gib * 1024**3))
                    if self.store_observation_images else nullcontext(None))
-        with storage as store:
+        from .native_preview import (MemoryPreview,has_external_preview,external_preview_uses_decoder,
+                                     send as preview_status,select_indices)
+        guider = getattr(executor,'class_obj',None)
+        external_preview = has_external_preview(guider)
+        follow_external = (shared is not None and not getattr(decoder,'decodes_prefix',True)
+                           and external_preview_uses_decoder(guider,decoder))
+        progressive_active = self.observation_settings.progressive_resolution and not follow_external
+        if follow_external:
+            from dataclasses import replace
+            policy = ObservationPolicy(replace(self.observation_settings,progressive_resolution=False),
+                                       min_progress=self.min_progress,interval=self.observation_interval)
+        settings['observer']['effective_progressive_resolution'] = progressive_active
+        settings['observer']['observation_source'] = 'external_preview' if follow_external else 'own'
+        if progressive_active:
+            LOG.warning('[MiniMax H3 Memory] Progressive resolution is an optional speed/quality trade-off: '
+                'smaller early views can miss details and weaken consistency. Matching resolution increases '
+                'with sampling; retained history needs additional same-scale queries. Speedup is workload-dependent.')
+        preview_enabled = self.memory_options.preview=='auto' and not external_preview
+        if shared is not None and preview_enabled and self.node_id is not None:
+            shared.suppress_standard_preview()
+        preview_status(self.node_id,mode='external' if external_preview else self.memory_options.preview,reset=True)
+        with storage as store, MemoryPreview(self.node_id,enabled=preview_enabled,
+                frames=self.memory_options.preview_frames,max_resolution=self.memory_options.preview_resolution,
+                fps=self.memory_options.preview_fps) as native_preview:
             budget_full = bool(disabled_reason)
             observations = 0
             skipped_observations = 0
             observation_seconds = 0.
+            tracking_seconds = 0.
             peak_cache_bytes = 0
             preview_size = None
             reference_preview_sizes = ()
@@ -343,14 +376,19 @@ class NativeVisualObserver:
                     text += f'; preview {preview_size[1]}x{preview_size[0]}'
                 if len(reference_preview_sizes) > 1:
                     text += f'; {len(reference_preview_sizes)} reference scales'
-                if self.observation_settings.progressive_resolution:
+                if progressive_active:
                     text += '; progressive previews (quality trade-off)'
+                if follow_external:
+                    text += '; using KJ preview resolution'
                 if store is None:
                     text += '; image storage off'
                 if self.memory_options.occlusion:
                     text += '; ' + (tracking_reason or 'tracking initializing')
+                    text += f'; tracking {tracking_seconds:.1f}s'
                 if acceleration is not None:
                     text += '; ' + acceleration.summary()
+                if shared is not None:
+                    text += f'; Tiny VAE {shared.decoded_frames} frames decoded, {shared.reused_frames} reused'
                 notify_native(self.node_id, text, log=log, state=state.lower(),
                     guidance_mode=mode, observations=observations, corrections=corrections,
                     frame_pair_proposals=frame_pairs,
@@ -361,13 +399,18 @@ class NativeVisualObserver:
                     reference_preview_sizes=reference_preview_sizes,
                     observation_reason=observation_reason, store_observation_images=store is not None,
                     acceleration=acceleration.metrics() if acceleration is not None else None,
+                    shared_decode=shared.metrics() if shared is not None else None,
+                    preview_mode='external' if external_preview else self.memory_options.preview,
+                    observation_source='external_preview' if follow_external else 'own',
                     disabled_reason=disabled_reason,
                     inspector=inspector_entry,
                     guidance_details=guidance.diagnostics() if guidance is not None and self.memory_options.inspect else None,
                     run_id=inspector.run_id, settings=settings, seed=seed,
                     tracking=dict(requested=self.memory_options.occlusion,
                         active=tracker is not None and not tracking_failed,
-                        automatic=not bool(configured_regions),reason=tracking_reason))
+                        automatic=not bool(configured_regions),reason=tracking_reason,
+                        seconds=tracking_seconds,cpu_threads=getattr(tracker,'cpu_threads',None),
+                        last_refresh=getattr(tracker,'last_metrics',{})))
 
             report('Sampling', log=True)
 
@@ -375,6 +418,8 @@ class NativeVisualObserver:
                 nonlocal budget_full, disabled_reason, observations, observation_seconds, peak_cache_bytes
                 nonlocal skipped_observations, preview_size, observation_reason, inspector_entry, tracking_failed, tracking_reason
                 nonlocal reference_preview_sizes
+                nonlocal tracking_seconds
+                frames = None
                 if guidance is not None:
                     guidance.progress = (step + 1) / max(1, total)
                 if acceleration is not None:
@@ -393,6 +438,9 @@ class NativeVisualObserver:
                         video = _unpack_video_x0(x0, latent_shapes)
                         if video is not None:
                             decision = policy.decide(video, step=step, total=total)
+                            if follow_external:
+                                from dataclasses import replace
+                                decision = replace(decision,size=tuple(video.shape[-2:]))
                             if acceleration is not None:
                                 acceleration.observe_prediction(video, progress=(step + 1) / max(1, total),
                                                                 fingerprint=decision.fingerprint)
@@ -431,6 +479,7 @@ class NativeVisualObserver:
                                     tracked = None
                                     tracking_event = dict(region='tracking',reason=tracking_reason) if tracking_reason else None
                                     if tracker is not None and not tracking_failed:
+                                        tracking_started = time.perf_counter()
                                         try:
                                             tracked = tracker.track(frames,configured_regions,
                                                 sources or mapped_protected or (0,))
@@ -444,6 +493,8 @@ class NativeVisualObserver:
                                                 f'Tracking unavailable: {type(exc).__name__}: {str(exc)[:120]}; whole-frame memory continues')
                                             tracking_reason = tracking_event['reason']
                                             LOG.warning(tracking_reason)
+                                        finally:
+                                            tracking_seconds += time.perf_counter()-tracking_started
                                     regional_plans = ()
                                     region_events, region_keys = [], set()
                                     for size, reference_frames in decoded_views.items():
@@ -525,6 +576,20 @@ class NativeVisualObserver:
                     finally:
                         observation_seconds += time.perf_counter() - started
                         report('Sampling')
+                if native_preview.enabled:
+                    try:
+                        indices = None
+                        if frames is None:
+                            video = _unpack_video_x0(x0,latent_shapes)
+                            if video is not None:
+                                indices = select_indices(video.shape[2],self.memory_options.preview_frames)
+                                size = policy.dimensions(video.shape,(step+1)/max(1,total))
+                                with preserve_observation_rng():
+                                    frames = decoder.decode_video(resize_observation(video[:1],size),frame_indices=indices)
+                        if frames is not None:
+                            native_preview.submit(frames,step=step,total=total,indices=indices)
+                    except Exception:
+                        LOG.debug('Standalone memory preview unavailable; sampling preserved',exc_info=True)
                 if callback is not None:
                     callback(step, x0, x, total)
 
@@ -545,9 +610,12 @@ class NativeVisualObserver:
                             metrics=dict(sampling_seconds=time.perf_counter()-sampling_started,
                                 observations=observations, observation_seconds=observation_seconds,
                                 preview_size=preview_size, reference_preview_sizes=reference_preview_sizes,
+                                shared_decode=shared.metrics() if shared is not None else None,
                                 tracking=dict(requested=self.memory_options.occlusion,
                                     active=tracker is not None and not tracking_failed,
-                                    automatic=not bool(configured_regions),reason=tracking_reason),
+                                    automatic=not bool(configured_regions),reason=tracking_reason,
+                                    seconds=tracking_seconds,cpu_threads=getattr(tracker,'cpu_threads',None),
+                                    last_refresh=getattr(tracker,'last_metrics',{})),
                                 guidance=guidance.diagnostics() if guidance else None,
                                 acceleration=acceleration.metrics() if acceleration else None))
                         notify_native(self.node_id, f'Memory report saved: {path}', report_path=path)
@@ -620,7 +688,7 @@ class MosaiChunkH3NativeVisualObserver:
             "observation_schedule": (["adaptive", "fixed"], {"default": "fixed",
                 "tooltip": "Adaptive: refresh when coarse latent predictions change, with warmup and a maximum refresh interval. Experimental; not an object tracker."}),
             "progressive_resolution": ("BOOLEAN", {"default": False,
-                "tooltip": "Optional speed/quality trade-off: observations and matching increase from the starting scale to full video resolution as sampling progresses. Smaller early views can miss details. Earlier references are preserved and queried at their own scales, adding decode work. Speedup depends on workload. Final video/model attention remain full resolution."}),
+                "tooltip": "Optional speed/quality trade-off for this node's own observations: sizes grow to full resolution as sampling progresses. Smaller early views can miss details. If KJ Preview Override uses the same Tiny VAE with sharing enabled, memory follows its full-resolution frames instead of decoding extra progressive sizes. Retained scales add work in standalone mode. Final video/model attention remain full resolution."}),
             "observation_start_scale": ("FLOAT", {"default": .5, "min": .25, "max": 1., "step": .05}),
             "observation_full_progress": ("FLOAT", {"default": .75, "min": .05, "max": .9, "step": .05,
                 "tooltip": "Sampling progress when observations reach 100% of the video's resolution. 0.75 means after 75% of sampling (around step 15 of 20), leaving the final 25% at full resolution. This is timing, not a resolution scale. Must exceed min_progress."}),
@@ -659,6 +727,13 @@ class MosaiChunkH3NativeVisualObserver:
             "memory_inspector": ("BOOLEAN", {"default": True, "tooltip": "Bounded in-memory preview cards, match reasons and correction map. No image files are retained."}),
             "export_memory_report": ("BOOLEAN", {"default": False, "tooltip": "Save a JSON settings/metrics report to output/minimax_memory_reports. No prompt text or image content is saved."}),
             "occlusion_aware_matching": ("BOOLEAN", {"default": False, "tooltip": "Opt-in: automatically installs isolated SAM 2 packages and a 156 MB tiny checkpoint on first use. CPU tracker; automatically proposes objects when no regions are drawn. Whole-frame memory remains active. Slower. Temporary tracker JPEGs are deleted."}),
+            "occlusion_cpu_threads": ("INT", {"default": 0,"min": 0,"max": 256,"step": 1,
+                "tooltip": "CPU threads for optional occlusion tracking only. 0 uses all logical threads available to this process; a positive number sets a limit, capped by availability. More threads may be slower; benchmark several limits. Does not change ComfyUI's main-process thread settings. Tracking remains opt-in."}),
+            "share_tiny_vae_frames": ("BOOLEAN", {"default": True,"tooltip": "Reuse compatible KJ taeh3 decode_video frames within each sampler callback, including Model Preview Override. Exact weights/latents, dtype and resolution must match. Missing frames and different progressive sizes still need decoding. Bounded CPU cache is cleared after each callback."}),
+            "memory_preview": (["auto","off"], {"default": "auto","tooltip": "Auto shows a silent, scrubbable observation preview on this node when KJ Model Preview Override is absent. Uses already decoded observations; steps without observations decode only the preview's selected frames."}),
+            "memory_preview_frames": ("INT", {"default": 16,"min": 1,"max": 64,"step": 1}),
+            "memory_preview_resolution": ("INT", {"default": 512,"min": 64,"max": 1024,"step": 64}),
+            "memory_preview_fps": ("FLOAT", {"default": 8.,"min": 1.,"max": 30.,"step": 1.}),
         }, "hidden": {"unique_id": "UNIQUE_ID"}}
 
     def apply(self, model, tiny_vae_name, max_frames=8, min_progress=0.25,
@@ -675,14 +750,18 @@ class MosaiChunkH3NativeVisualObserver:
               cache_transfer_mib=16, adaptive_sol=False, sol_stable_boost=.15, sol_drift_threshold=.04,
               memory_preset='Consistency', memory_regions='[]', protected_frames='',
               confidence_guidance=False, memory_inspector=True, export_memory_report=False,
-              occlusion_aware_matching=False):
+              occlusion_aware_matching=False, occlusion_cpu_threads=0,share_tiny_vae_frames=True,
+              memory_preview='auto',memory_preview_frames=16,memory_preview_resolution=512,memory_preview_fps=8.):
         from comfy.patcher_extension import WrappersMP
         from .native_guidance import GuidanceConfig
         from .generation_acceleration import AccelerationConfig
         from .memory_controls import MemoryOptions
         memory = MemoryOptions(regions=memory_regions,protected_frames=protected_frames,
             inspect=bool(memory_inspector),export_report=bool(export_memory_report),
-            occlusion=bool(occlusion_aware_matching),preset=memory_preset).validate()
+            occlusion=bool(occlusion_aware_matching),preset=memory_preset,
+            cpu_threads=occlusion_cpu_threads,share_frames=bool(share_tiny_vae_frames),
+            preview=memory_preview,preview_frames=memory_preview_frames,
+            preview_resolution=memory_preview_resolution,preview_fps=memory_preview_fps).validate()
         acceleration = AccelerationConfig(mode=generation_acceleration, sol_tau=float(sol_tau),
             start=float(acceleration_start), end=float(acceleration_end),
             cache_threshold=float(cache_threshold), cache_max_reuse=int(cache_max_reuse),

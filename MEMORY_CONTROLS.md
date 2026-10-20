@@ -120,8 +120,15 @@ python -m mosaichunk_h3.optional_occlusion
 Run that command from the node directory. Normal node installation does not run it.
 Downloads and package building need internet access and a writable node folder.
 
-The tracker runs in a separate CPU process with two threads, preserving GPU
-headroom for H3. It uses a maximum of 16 sampled observation frames and four
+The tracker runs in a separate CPU process, preserving GPU headroom for H3.
+`occlusion_cpu_threads=0` uses all logical threads available to the process
+(including detected affinity limits); a positive value caps the worker's
+thread count. It never changes the main ComfyUI process's PyTorch or environment
+settings. Tracking remains default-off and needs no packages while disabled.
+More threads are not universally faster; benchmark a few limits on your CPU.
+Status and optional reports now separate tracking time from total observation
+time, and include the effective thread count and last refresh timings.
+It uses a maximum of 16 sampled observation frames and four
 selected regions per refresh. CPU tracking can be substantially slower and use
 additional system RAM. Sparse preview frames can miss a short occlusion.
 Untracked or hidden targets receive no regional guidance; whole-frame matching
@@ -138,6 +145,49 @@ Only the reusable tracker packages and checkpoint remain installed.
 
 Upstream implementation and license:
 [Meta SAM 2](https://github.com/facebookresearch/sam2).
+
+## Shared Tiny VAE frames and standalone playback
+
+`share_tiny_vae_frames=true` reuses compatible uint8 RGB frames from KJ's
+24-channel 2D `TinyVAEDecoder.decode_video` API within the same sampler callback.
+This includes Model Preview Override and other nodes calling that API while
+this memory node is in the model path. Both wrapper orders are supported. A
+partial preview request fills only its frames; memory decodes only missing
+frames. Memory-first decoding supplies later preview requests from the cache.
+
+When KJ Preview Override selects the same Tiny VAE file, memory follows its
+full-resolution view. This avoids adding smaller progressive decodes to a
+preview that already requires full resolution. The status says `using KJ
+preview resolution`. Progressive observation remains available when this node
+owns the preview instead; earlier scale-specific references still persist.
+
+Reuse checks exact decoder weights, latent values, dtype/device, layout and
+resolution, including cloned inputs and modified weights. It uses bounded CPU
+RGB storage, cleared after every callback and on error/cancellation. Consumers
+receive independent CPU tensors. Temporary class hooks are execution-owned,
+context-local in effect and restored afterwards; unrelated threads keep normal
+decoding. No KJ or ComfyUI source files are edited. Weight/latent fingerprints
+require CPU transfers and hashing, so reuse has some overhead. Decoded/reused
+frame counts and peak cache bytes are exposed in status/reports.
+
+Temporal/prefix decoders, float-image `decode()` calls and custom implementations
+that bypass KJ's compatible `decode_video` API are not automatically shared.
+Different weights or resolutions still require separate decoding. Cache budget
+evictions can also require a later decode; the eviction count is reported.
+
+`memory_preview=auto` provides an in-node silent observation player when KJ
+Preview Override is absent. It supports play/pause and frame scrubbing, and
+holds only the latest preview. It reuses observation RGB. Steps without a memory
+observation decode only the selected preview frames; set `memory_preview=off`
+to avoid this preview work. CPU JPEG encoding uses a bounded background queue.
+`memory_preview_frames` (16), `memory_preview_resolution` (512) and
+`memory_preview_fps` (8) control playback, not final video settings. The player
+is diagnostic sampling playback, not final video/audio output. When KJ preview
+is present this node's player hides and does no duplicate encoding.
+When the memory player owns playback, the shared callback scope suppresses the
+sampler's ordinary image preview to avoid another Tiny VAE pass for the same
+display. Progress/x0 callbacks still run. Unrelated threads and previews outside
+the callback scope retain their original behavior; the hooks are restored.
 
 ## Compatibility and reports
 

@@ -16,8 +16,11 @@ import tempfile
 
 
 class OcclusionTracker(AbstractContextManager):
-    def __init__(self, root):
+    def __init__(self, root, *, cpu_threads=0):
+        from .cpu_threads import resolve_cpu_threads
         self.root = root
+        self.cpu_threads = resolve_cpu_threads(cpu_threads)
+        self.last_metrics = {}
         self.process = None
         self.responses = queue.Queue(maxsize=4)
         self.errors = []
@@ -28,11 +31,12 @@ class OcclusionTracker(AbstractContextManager):
 
     def __enter__(self):
         self.temp = tempfile.TemporaryDirectory(prefix='minimax-tracking-')
-        env = dict(os.environ, CUDA_VISIBLE_DEVICES='', OMP_NUM_THREADS='2',
+        env = dict(os.environ, CUDA_VISIBLE_DEVICES='', OMP_NUM_THREADS=str(self.cpu_threads),
+                   MKL_NUM_THREADS=str(self.cpu_threads),
                    PYTHONPATH=str(Path(__file__).resolve().parents[1]), PYTHONUNBUFFERED='1')
         try:
             self.process = subprocess.Popen([sys.executable, '-u', '-m',
-                'mosaichunk_h3.occlusion_worker', str(self.root)], stdin=subprocess.PIPE,
+                'mosaichunk_h3.occlusion_worker', str(self.root), str(self.cpu_threads)], stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', env=env,
                 creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         except BaseException:
@@ -51,6 +55,8 @@ class OcclusionTracker(AbstractContextManager):
             response = self.wait(180)
             if not response.get('ready'):
                 raise RuntimeError('SAM 2 worker did not initialize')
+            if response.get('cpu_threads', self.cpu_threads) != self.cpu_threads:
+                raise RuntimeError('SAM 2 worker thread configuration does not match the requested budget')
         except BaseException:
             self.close()
             raise
@@ -76,6 +82,7 @@ class OcclusionTracker(AbstractContextManager):
         raise TimeoutError('Optional SAM 2 tracker timed out; disable occlusion_aware_matching to continue')
 
     def track(self, frames, regions, sources=(0,)):
+        started = time.perf_counter()
         from PIL import Image
         import torch
         self.automatic = not bool(regions)
@@ -101,9 +108,11 @@ class OcclusionTracker(AbstractContextManager):
         self.process.stdin.write(json.dumps(request)+'\n')
         self.process.stdin.flush()
         result = self.wait(300)
+        self.last_metrics = dict(result.get('metrics',{}), wall_seconds=time.perf_counter()-started,
+                                 cpu_threads=self.cpu_threads)
         from .region_memory import Region
         self.regions = tuple(Region(r['name'],tuple(r['box'])) for r in result.get('regions',[]))
-        self.last_reason = result.get('reason','')
+        self.last_reason = result.get('reason','') + f'; CPU threads {self.cpu_threads}'
         return {(r['frame'],r['region']):r for r in result['records']}
 
     def close(self):

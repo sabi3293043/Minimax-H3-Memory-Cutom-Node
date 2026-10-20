@@ -294,6 +294,9 @@ pixels. Temporal length, sampler latents, model attention and final output
 resolution are unchanged. Spatial rounding and minimum sizes can merge stages
 for very small videos. **Optional speed/quality trade-off:** smaller previews
 can lose details and weaken appearance matching. This remains off by default.
+With frame sharing enabled and KJ Model Preview Override using the same Tiny
+VAE, memory follows that preview's full-resolution frames instead of requesting
+extra progressive sizes. Progressive controls apply to this node's own views.
 
 Adaptive mode compares bounded thumbnails of the current latent prediction to
 the last observed prediction. Changes can request an earlier refresh, while
