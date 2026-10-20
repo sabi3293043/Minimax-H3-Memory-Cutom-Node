@@ -230,7 +230,8 @@ class AccelerationSession:
         if not math.isfinite(sigma):
             self.clear_cache()
             return
-        plan = ((tuple(self.guidance.pairs), self.guidance.progress >= self.guidance.config.end_progress)
+        plan = ((tuple(self.guidance.pairs), getattr(self.guidance,'plan_version',0),
+                 self.guidance.progress >= self.guidance.config.end_progress)
                 if self.guidance is not None else None)
         signature = (tuple(x.shape), x.dtype, x.device, tuple(layout.signature),
                      tuple(layout.segments), tuple(opts.get('uuids', ())), self.tau, plan)

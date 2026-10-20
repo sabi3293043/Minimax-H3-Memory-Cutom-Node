@@ -81,10 +81,10 @@ class LifecycleTests(unittest.TestCase):
     def test_cuda_oom_disables_observation_and_clears_stale_guidance(self):
         decoder = self.decoder()
         decoder.decode_video.side_effect = torch.OutOfMemoryError('synthetic CUDA OOM')
-        session = SimpleNamespace(progress=0, pairs=((0, 2),), corrections=0, corrected_rows=0,
-            matched_proposals=0,
-            config=SimpleNamespace(mode='manual_frames', end_progress=.95,
-                source_frame=0, target_frames='5'))
+        from mosaichunk_h3.native_guidance import GuidanceConfig, GuidanceSession
+        session = GuidanceSession(GuidanceConfig(mode='manual_frames', layers='0',
+            target_frames='5'), [1,24,3,2,2])
+        session.pairs = ((0,2),)
         events, forwarded = self.run_observer(decoder, direct=True, guidance=session)
         self.assertEqual(decoder.decode_video.call_count, 1)
         self.assertFalse(session.pairs)
@@ -119,6 +119,17 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(events[-1]['guidance_mode'], 'manual_frames')
         self.assertEqual(forwarded, [0, 1, 2, 3])
         self.assertFalse(session.pairs)
+
+    def test_manual_frame_plans_survive_callback_with_and_without_inspector(self):
+        from mosaichunk_h3.native_guidance import GuidanceConfig, GuidanceSession
+        from mosaichunk_h3.memory_controls import MemoryOptions
+        for inspect in (True,False):
+            session=GuidanceSession(GuidanceConfig(mode='manual_frames',layers='0',
+                target_frames='5'),[1,24,3,2,2])
+            def check_plan(step,*args):
+                if step<3:self.assertEqual(session.pairs,((0,2),))
+            self.run_observer(self.decoder(),direct=True,guidance=session,callbacks=4,
+                callback=check_plan,observer_options={'memory_options':MemoryOptions(inspect=inspect)})
 
     def test_invalid_runtime_budgets_fail_before_execution(self):
         for options in [dict(observation_interval=0), dict(observation_interval=101),

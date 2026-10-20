@@ -1,8 +1,35 @@
 # Validation status
 
-## Observation speed defaults
+## Native region memory and optional tracking (2026-10-20)
 
-New nodes now default to `observation_schedule=adaptive`,
+- 517 selected CPU/unit tests cover legacy contracts plus region isolation,
+  trusted-reference drift rejection, protected eviction, callback continuity,
+  diagnostic snapshots and optional-installer isolation/cleanup.
+- Native tiny H3 + CFGGuider/Euler runs use the real installed Tiny VAE for
+  text, first-frame, first/last-frame and reference conditioning. Cancellation
+  restores original model options and releases residuals.
+- A native tiny H3 region test uses controlled decoded observations to exercise
+  actual regional attention, yielding 34 correction calls. It is not a test of
+  trained-video identity or the appearance match rate of natural images.
+- Tiny CUDA/aimdo runs pass normal guidance, regional correction and RAM cache
+  reuse. The tiny model does not exercise full-size H3 sparse Sol kernels.
+- The official SAM 2.1 tiny checkpoint is SHA256-verified and loads on CPU.
+  Real CPU tracking of three synthetic frames returns masks and cleans its
+  worker process and temporary image directory. This is pipeline evidence,
+  not proof of reliable reacquisition through a real clothing occlusion.
+- Browser tests exercise drawing regions, pinning final-video frame indices,
+  presets/Custom detection, JSON report download/comparison and close cleanup.
+  A separate CPU ComfyUI server verifies real node registration, inspector
+  rendering and hidden-widget serialization with no jobs queued.
+- Shared descriptor extraction matches pre-change whole-frame guidance exactly
+  in five seeded CPU arithmetic comparisons. This does not prove that optional
+  regional guidance, confidence weighting or acceleration preserve the output.
+- No full trained-checkpoint video was generated for this revision. Compare
+  identical-seed outputs before claiming improved clothing/identity quality.
+
+## Historical observation speed defaults (superseded)
+
+Earlier versions defaulted to `observation_schedule=adaptive`,
 `progressive_resolution=true` and `store_observation_images=false`. Existing
 workflow values remain explicit and are not overwritten. Historical references
 below to fixed/full/image-storage defaults describe earlier revisions. The

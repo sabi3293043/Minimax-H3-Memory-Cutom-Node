@@ -7,7 +7,8 @@ cache. Observation defaults and memory-guidance settings are unchanged.
 
 These methods approximate model computations and can change detail, motion,
 reference adherence and audio. Full trained-model GPU speed and quality remain
-to be validated. New nodes default to conservative combined acceleration;
+to be validated. New nodes default to Consistency with approximate acceleration off;
+Balanced selects the conservative combined settings below;
 explicit settings in saved workflows are preserved. Select `off` for a baseline.
 This is an exploratory preset, not a guarantee of unchanged appearance memory.
 
@@ -27,7 +28,7 @@ This is an exploratory preset, not a guarantee of unchanged appearance memory.
 
 | Control | Starting value | Meaning |
 | --- | --- | --- |
-| `generation_acceleration` | `sol_and_cache` | Combined acceleration; compare with off and Sol alone |
+| `generation_acceleration` | `off` | Consistency default; Balanced enables sol_and_cache |
 | `sol_tau` | `0.50` | Higher is sparser with greater approximation |
 | `acceleration_start` | `0.35` | Fraction of the noise schedule before acceleration starts |
 | `acceleration_end` | `0.75` | Return to full computation near the end |

@@ -40,6 +40,10 @@ class GuidanceConfig:
     similarity: float = 0.85
     margin: float = 0.02
     end_progress: float = 0.95
+    memory_regions: str = '[]'
+    protected_frames: str = ''
+    confidence_guidance: bool = False
+    inspect_memory: bool = False
 
     def validate(self):
         if self.mode not in MODES:
@@ -54,6 +58,10 @@ class GuidanceConfig:
         if not layers:
             raise ValueError('Select at least one guidance layer')
         targets = frame_numbers(self.target_frames)
+        from .region_memory import parse_regions
+        parse_regions(self.memory_regions)
+        if len(frame_numbers(self.protected_frames)) > 8:
+            raise ValueError('Protect at most eight source frames')
         if self.mode == 'manual_frames' and (not targets or self.source_frame in targets):
             raise ValueError('manual_frames requires target frames distinct from guidance_source_frame')
         return self
@@ -85,6 +93,8 @@ class GuidanceSession:
         self.config = config.validate()
         if len(latent_shape) != 5 or latent_shape[0] != 1 or latent_shape[1] != 24:
             raise ValueError('Native guidance requires batch-one H3 video latents')
+        if latent_shape[2] < 1 or any(size < 2 or size % 2 for size in latent_shape[3:]):
+            raise ValueError('Native H3 memory requires positive temporal length and even spatial latent dimensions')
         self.latent_t = int(latent_shape[2])
         self.frame_rows = (int(latent_shape[3]) // 2) * (int(latent_shape[4]) // 2)
         self.layers = frozenset(frame_numbers(config.layers))
@@ -92,10 +102,39 @@ class GuidanceSession:
         self.progress = 0.
         self.corrections = self.corrected_rows = self.observations = 0
         self.matched_proposals = 0
+        self.frame_h, self.frame_w = int(latent_shape[3]) // 2, int(latent_shape[4]) // 2
+        self.region_plans = ()
+        self.plan_version = 0
+        self.decisions = []
+        self.heatmap = {}
+        self.evaluated_plan_version = None
+        from .region_memory import parse_regions
+        self.has_regions = bool(parse_regions(config.memory_regions))
+
+    def set_region_plans(self, plans):
+        if tuple(plans) != self.region_plans:
+            self.plan_version += 1
+        self.region_plans = tuple(plans)
+        self.pairs = tuple(dict.fromkeys((p.source, p.target) for p in plans))
+        self.matched_proposals += len(plans)
+
+    def clear_plan(self):
+        self.pairs = self.region_plans = ()
+        self.plan_version += 1
+
+    def diagnostics(self):
+        return dict(corrected_rows=self.corrected_rows, corrections=self.corrections,
+                    decisions=[dict(d) for d in self.decisions[-24:]],
+                    heatmap={key:list(cells) for key,cells in self.heatmap.items()},
+                    evaluated_plan_version=self.evaluated_plan_version,
+                    next_plan_version=self.plan_version,
+                    grid=[16, 16])
 
     def observe(self, frames, references, *, step, total):
         """Publish frame IDs only. Previous-step tensors never enter attention."""
         self.observations += 1
+        if not self.has_regions:
+            self.region_plans = ()
         self.progress = (step + 1) / max(1, total)
         count = int(frames.shape[0])
         if self.config.mode == 'manual_frames':
@@ -140,30 +179,67 @@ class GuidanceSession:
         if stop - start != self.latent_t * self.frame_rows or output.shape != (1, q.shape[2], heads * q.shape[3]):
             raise ValueError('H3 packed layout does not match guidance video geometry')
         out = None
-        for source_frame, target_frame in self.pairs:
+        from .region_memory import RegionPlan, grid_ids
+        plans = self.region_plans or tuple(RegionPlan(s, t, 'whole frame', (0,0,1,1),
+            (0,0,1,1), 1., s, t) for s,t in self.pairs)
+        self.decisions = []
+        self.evaluated_plan_version = self.plan_version
+        # Source/target descriptors are computed once per frame/attention call.
+        feature_cache = {}
+        def frame_features(frame):
+            if frame not in feature_cache:
+                values = v[:, :, start+frame*self.frame_rows:start+(frame+1)*self.frame_rows]
+                values = values.transpose(1,2).flatten(2)[0]
+                stride = max(1, values.shape[1] // 128)
+                feature_cache[frame] = F.normalize(values[:, ::stride][:,:128].float(), dim=-1)
+            return feature_cache[frame]
+        # Divide the anchor budget between regions instead of multiplying it.
+        per_plan = max(1, self.config.max_anchor_tokens // max(1, len({p.name for p in plans})))
+        changed_targets = {}
+        for plan in plans:
+            source_frame, target_frame = plan.source, plan.target
             source = start + source_frame * self.frame_rows
             target = start + target_frame * self.frame_rows
-            anchor_ids = torch.linspace(source, source + self.frame_rows - 1,
-                min(self.frame_rows, self.config.max_anchor_tokens), device=q.device).round().long().unique()
+            local_source = grid_ids(plan.source_box, self.frame_h, self.frame_w, device=q.device,
+                                    mask=plan.source_mask)
+            local_target = grid_ids(plan.target_box, self.frame_h, self.frame_w, device=q.device,
+                                    mask=plan.target_mask)
+            if target_frame in changed_targets:
+                # Overlapping regions cannot apply or overwrite multiple corrections.
+                local_target = local_target[~torch.isin(local_target,changed_targets[target_frame])]
+            if not local_source.numel() or not local_target.numel():
+                continue
+            selected = torch.linspace(0, len(local_source)-1, min(len(local_source),per_plan),
+                                      device=q.device).round().long().unique()
+            local_source = local_source[selected]
+            anchor_ids = source + local_source
             # Values carry content without RoPE. Use a bounded deterministic
             # descriptor slice, not a full N x N attention/similarity matrix.
             anchor_v = v.index_select(2, anchor_ids)
-            anchor_features = anchor_v.transpose(1, 2).flatten(2)[0].float()
-            stride = max(1, anchor_features.shape[1] // 128)
-            anchor_features = F.normalize(anchor_features[:, ::stride][:, :128], dim=-1)
-            for offset in range(0, self.frame_rows, 256):
-                end = min(offset + 256, self.frame_rows)
-                ids = torch.arange(target + offset, target + end, device=q.device)
-                features = v.index_select(2, ids).transpose(1, 2).flatten(2)[0].float()
-                features = F.normalize(features[:, ::stride][:, :128], dim=-1)
+            anchor_features = frame_features(source_frame).index_select(0, local_source)
+            target_features = frame_features(target_frame)
+            changed, tested = 0, 0
+            rejected = dict(low_similarity=0, ambiguous=0, non_mutual=0)
+            for local_ids in local_target.split(256):
+                ids = target + local_ids
+                features = target_features.index_select(0, local_ids)
                 scores = features @ anchor_features.T
                 best = scores.topk(min(2, scores.shape[1]), dim=1).values
                 valid = best[:, 0] >= self.config.similarity
+                if self.config.inspect_memory:
+                    rejected['low_similarity'] += int((~valid).sum().item())
                 if best.shape[1] == 2:
-                    valid &= best[:, 0] - best[:, 1] >= self.config.margin
+                    unique = best[:, 0] - best[:, 1] >= self.config.margin
+                    if self.config.inspect_memory:
+                        rejected['ambiguous'] += int((valid & ~unique).sum().item())
+                    valid &= unique
                 match = scores.argmax(dim=1)
                 reverse = scores.argmax(dim=0)
-                valid &= reverse[match] == torch.arange(len(features), device=q.device)
+                mutual = reverse[match] == torch.arange(len(features), device=q.device)
+                if self.config.inspect_memory:
+                    rejected['non_mutual'] += int((valid & ~mutual).sum().item())
+                valid &= mutual
+                tested += len(features)
                 if not valid.any():
                     continue
                 ids = ids[valid]
@@ -173,21 +249,49 @@ class GuidanceSession:
                 anchor_output = backend(q.index_select(2, ids), k.index_select(2, anchor_ids),
                     anchor_v, heads, transformer_options=transformer_options, **extra_kwargs)
                 normal = output.index_select(1, ids)
-                delta = (anchor_output.float() - normal.float()) * self.config.strength
+                weight = self.config.strength
+                if self.config.confidence_guidance:
+                    # Confidence only attenuates; it cannot amplify the configured strength.
+                    confidence = ((best[valid,0]-self.config.similarity) /
+                                  max(1e-6,1-self.config.similarity)).clamp(0,1)
+                    weight = weight * confidence[None,:,None] * plan.confidence
+                delta = (anchor_output.float() - normal.float()) * weight
                 # Bound each token's residual relative to the normal attention.
                 limit = normal.float().norm(dim=-1, keepdim=True) * .1
                 delta *= (limit / delta.norm(dim=-1, keepdim=True).clamp_min(1e-8)).clamp(max=1.)
                 if not torch.isfinite(delta).all():
                     raise ValueError('Nonfinite native appearance correction')
+                affected = delta.norm(dim=-1)[0] > 0
+                ids, delta, normal = ids[affected], delta[:,affected], normal[:,affected]
+                if not ids.numel():
+                    continue
+                prior_ids = changed_targets.get(target_frame)
+                changed_targets[target_frame] = (ids-target if prior_ids is None else
+                    torch.cat((prior_ids,ids-target)))
                 if out is None:
                     out = output.clone()
                 out[:, ids] = (normal.float() + delta).to(output.dtype)
                 self.corrected_rows += int(ids.numel())
                 self.corrections += 1
+                changed += int(ids.numel())
+                if self.config.inspect_memory:
+                    cells = ((ids-target) // self.frame_w * 16 // self.frame_h * 16
+                             + (ids-target) % self.frame_w * 16 // self.frame_w).unique().cpu().tolist()
+                    key = str(target_frame)
+                    heat = set(self.heatmap.get(key, []))
+                    self.heatmap[key] = sorted(heat.union(cells))[:256]
+                    while len(self.heatmap) > 32:
+                        self.heatmap.pop(next(iter(self.heatmap)))
+            if self.config.inspect_memory:
+                self.decisions.append(dict(region=plan.name, source=plan.source_frame,
+                    target=plan.target_frame, tested=tested, corrected=changed,
+                    reason='matched' if changed else 'no confident unique feature matches',
+                    confidence=round(plan.confidence,3),rejected=rejected))
         return output if out is None else out
 
     def close(self):
-        self.pairs = ()
+        self.clear_plan()
+        self.heatmap.clear()
 
 
 @contextmanager

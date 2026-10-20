@@ -26,7 +26,7 @@ class AdaptiveVisualIndex:
     """
 
     def __init__(self, *, capacity: int = 24, captures_per_step: int = 4,
-                 match_threshold: float = 0.025):
+                 match_threshold: float = 0.025, protected_frames=()):
         if capacity < 1 or captures_per_step < 1:
             raise ValueError("capacity and captures_per_step must be positive")
         if not (0 < match_threshold < 1):
@@ -35,6 +35,9 @@ class AdaptiveVisualIndex:
         self.captures_per_step = int(captures_per_step)
         self.match_threshold = float(match_threshold)
         self.entries: list[StoredObservation] = []
+        self.protected_frames = frozenset(protected_frames)
+        if len(self.protected_frames) > capacity:
+            raise ValueError('Protected frames exceed max_memory_frames')
         self._previous = None
         self._previous_step = None
 
@@ -107,7 +110,8 @@ class AdaptiveVisualIndex:
             if pool and float(scores[best]) < 0.12:
                 break
             chosen.append(best)
-        return [(i, x[i].clone(), float(0.25 + 0.75 * stable[i])) for i in chosen]
+        chosen = list(dict.fromkeys([i for i in sorted(self.protected_frames) if i < n] + chosen))
+        return [(i, x[i].clone(), float(0.25 + 0.75 * stable[i])) for i in chosen[:max(self.captures_per_step,len(self.protected_frames))]]
 
     def put(self, step, frame, descriptor, confidence, record, *, on_evict):
         """Retain at most capacity images and ask caller to evict their disk files."""
@@ -118,12 +122,17 @@ class AdaptiveVisualIndex:
                                   descriptor.detach().float().cpu().clone(), record)
         prior = next((e for e in self.entries if e.frame == entry.frame), None)
         if prior is not None:
+            if prior.frame in self.protected_frames and prior.confidence >= .5:
+                return False
             if entry.confidence < prior.confidence:
                 return False
             on_evict(prior.record)
             self.entries.remove(prior)
         elif len(self.entries) >= self.capacity:
-            weakest = min(self.entries, key=lambda e: (e.confidence, e.step))
+            unprotected = [e for e in self.entries if e.frame not in self.protected_frames]
+            if not unprotected:
+                return False
+            weakest = min(unprotected, key=lambda e: (e.confidence, e.step))
             if entry.confidence < weakest.confidence:
                 return False
             on_evict(weakest.record)

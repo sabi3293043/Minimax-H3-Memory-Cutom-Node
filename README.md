@@ -1,5 +1,29 @@
 # MiniMax H3 Memory Custom Node
 
+## Start here: native memory with your existing H3 model
+
+Search **memory** and add **MiniMax H3 Memory — Native Visual Observer
+(experimental)**. Connect your existing UNET/LoRA chain to its MODEL input, then
+its output to your normal native H3 guider/sampler. Use CFG 1. It supports native
+text, first-frame, first/last-frame and reference conditioning experimentally.
+
+Install the node using the clone command below, plus
+[ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) and the
+[24-channel H3 Tiny VAE](https://github.com/madebyollin/taehv/blob/main/safetensors/taeh3.safetensors)
+in `ComfyUI/models/vae_approx`. Keep your existing H3 checkpoint, text encoder
+and video/audio VAEs. The native node does **not** require the RAVEN conditioning
+file, RAVEN LoRA, router, or full non-pruned checkpoint listed in the legacy
+sections below. Do not run the legacy model downloader for the native node.
+
+New nodes use **Consistency**; **Balanced** enables approximate acceleration.
+Use **Memory inspector** to select regions and protect source frames. Optional
+occlusion tracking stays off and downloads nothing until explicitly enabled.
+See [MEMORY_CONTROLS.md](MEMORY_CONTROLS.md) for controls, setup and limitations.
+The implementation uses experimental visual/feature matching; trained-video
+identity and outfit preservation are not guaranteed.
+
+## Legacy RAVEN chunk backend
+
 **Experimental local ComfyUI port of MosaiChunk's T2V memory router. Full-size video generation and quality are not yet validated by this repository.**
 
 **Existing pruned H3 checkpoint:** use **MosaiChunk H3 Conditioning**, the MODEL-to-MODEL controller, between your UNET/LoRA chain and your normal sampler or BasicGuider. Memory now accepts **text-to-video, first/last-frame and reference conditioning**. Image-conditioned routing and the transfer onto REF2VA are experimental; trained video quality has not been validated. Use four steps, CFG 1 and `generation_mode=auto`. The host sampler supplies seed/noise/step count; its numerical solver and sigma grid are replaced by the RAVEN consistency recipe. The original local FL2VA pruned checkpoint is used only as a modulation-update baseline, with `conditioning_base_unet=auto`; it is not loaded as a second generator. See [PRUNED.md](PRUNED.md). No full checkpoint download is required.
@@ -16,7 +40,7 @@ Clone into `ComfyUI/custom_nodes`:
 git clone https://github.com/sabi3293043/Minimax-H3-Memory-Cutom-Node.git
 ```
 
-Use ComfyUI's Python to download the required model files:
+For the **legacy RAVEN chunk backend only**, use ComfyUI's Python to download its model files:
 
 ```bash
 python custom_nodes/Minimax-H3-Memory-Cutom-Node/download_models.py --comfy-root . --plan
@@ -86,13 +110,24 @@ GPU memory contains model working weights, activations, and one layer's assemble
 
 Current scope: text-to-video-and-audio plus experimental first/last-frame and reference memory, batch one, one GPU, one prompt per run, CPU or CPU-pinned history. The controller supports native pruned H3 models whose time basis can represent the RAVEN update. Persistent memory across runs, interactive prompt schedules, GGUF, PDD/VSA variants and paper-level reproducibility are not implemented. Image-conditioned modes reuse the released T2V router without retraining; correct data flow does not establish identity quality.
 
+## Memory inspector, regions, protected references and optional tracking
+
+**MiniMax H3 Memory** now includes a visual inspector, selectable memory regions,
+protected source frames, a stable RGB reference bank, optional confidence-based
+guidance, Consistency/Balanced/Speed presets, compatibility checks, and opt-in
+JSON comparison reports. **Occlusion-aware matching is off by default**; its
+first enabled execution downloads isolated SAM 2 dependencies and the 156 MB
+tiny tracker. Ordinary users do not need that download. See
+[MEMORY_CONTROLS.md](MEMORY_CONTROLS.md) for setup, controls and limitations.
+
 ## Native H3 visual observer (experimental)
 
 **Optional generation acceleration:** the same node now has
 `generation_acceleration=sol`, `selective_cache`, or `sol_and_cache`.
 Start with **Sol**, then compare the combined mode. Memory layers remain real
-and dense; caching never skips them. New nodes use the conservative combined
-preset below; explicit settings in existing workflows are preserved.
+and dense; caching never skips them. New nodes use the Consistency
+preset with approximate acceleration off; Balanced and Speed enable it.
+Explicit settings in existing workflows are preserved.
 No new model download or Turbo LoRA is required. These are experimental
 approximations with no measured full-model speedup in this repository yet.
 See [GENERATION_ACCELERATION.md](GENERATION_ACCELERATION.md) for settings,
@@ -142,7 +177,8 @@ The consistency-first starting preset uses `max_frames=8`, `max_memory_frames=64
 `guidance_layers=8,16,24`, `guidance_similarity=0.85`, `max_anchor_tokens=256`,
 `observation_interval=1`, `max_observation_megapixels=64` and `disk_gib=2`.
 Observations use `observation_schedule=fixed` and `progressive_resolution=false`,
-with conservative `sol_and_cache` acceleration: `sol_tau=0.50`,
+with approximate acceleration off by default. The Balanced preset enables
+`sol_and_cache`: `sol_tau=0.50`,
 `acceleration_start=0.35`, `acceleration_end=0.75`, `cache_threshold=0.02`,
 `cache_max_reuse=1`, `cache_storage=ram`, `cache_ram_gib=2`,
 `cache_transfer_mib=16` and `adaptive_sol=false`. These defaults favor observation

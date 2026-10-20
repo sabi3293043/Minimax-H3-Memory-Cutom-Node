@@ -93,9 +93,18 @@ def _load_tae_decoder(name):
     """Reuse the installed KJ tiny-VAE loader instead of copying its decoder."""
     import folder_paths
     name = choose_tiny_vae(name, folder_paths.get_filename_list("vae_approx"))
-    home = (Path(folder_paths.__file__).resolve().parent / "custom_nodes"
-            / "ComfyUI-KJNodes" / "nodes" / "tiny_vae.py")
-    if not home.is_file():
+    roots = list(getattr(folder_paths,'get_folder_paths',lambda key: [])('custom_nodes'))
+    roots.append(Path(folder_paths.__file__).resolve().parent / 'custom_nodes')
+    home = None
+    for root in dict.fromkeys(Path(value) for value in roots):
+        if root.is_dir():
+            for candidate in root.iterdir():
+                if candidate.name.casefold() == 'comfyui-kjnodes' and (candidate/'nodes/tiny_vae.py').is_file():
+                    home = candidate/'nodes/tiny_vae.py'
+                    break
+        if home is not None:
+            break
+    if home is None:
         raise RuntimeError("ComfyUI-KJNodes/nodes/tiny_vae.py is required for TAEH3 observation")
     module_name = "_mosaichunk_h3_kj_tiny_vae"
     module = sys.modules.get(module_name)
@@ -136,7 +145,7 @@ class NativeVisualObserver:
                  max_memory_frames=24, temp_root=None, feedback_hook=None,
                  guidance=None, max_observation_megapixels=64.,
                  observation_interval=1, node_id=None, observation_settings=None,
-                 store_observation_images=True, acceleration=None):
+                 store_observation_images=True, acceleration=None, memory_options=None):
         if not 1 <= int(max_frames) <= 64:
             raise ValueError("max_frames must be between 1 and 64")
         if not 1 <= int(max_memory_frames) <= 256:
@@ -164,6 +173,8 @@ class NativeVisualObserver:
             min_progress=self.min_progress, interval=self.observation_interval)
         self.store_observation_images = bool(store_observation_images)
         self.acceleration = acceleration
+        from .memory_controls import MemoryOptions
+        self.memory_options = (memory_options or MemoryOptions()).validate()
 
     def __call__(self, executor, noise, latent_image, sampler, sigmas,
                  denoise_mask=None, callback=None, disable_pbar=False,
@@ -189,21 +200,35 @@ class NativeVisualObserver:
         guider = getattr(executor, 'class_obj', None)
         if guider is None or not hasattr(guider, 'model_options'):
             raise ValueError('Native correction/acceleration requires ComfyUI BasicGuider/CFGGuider')
-        if ((guided or (accelerated and self.acceleration.cache)) and
-                (float(getattr(guider, 'cfg', 1.)) != 1. or denoise_mask is not None)):
-            raise ValueError('Experimental native correction currently requires CFG 1 and no denoise mask')
         if not latent_shapes or len(latent_shapes) != 2:
             raise ValueError('Native correction requires H3 video/audio latents')
+        from .memory_controls import compatibility
+        compatibility(guider, guided=guided, accelerated=accelerated and self.acceleration.cache,
+                      denoise_mask=denoise_mask)
         session = GuidanceSession(self.guidance, latent_shapes[0]) if guided else None
+        root_model = guider.model_patcher.get_model_object('diffusion_model')
+        if not getattr(root_model,'blocks',None):
+            raise ValueError('MiniMax H3 Memory requires a native H3 transformer, loaded through your usual UNET loader')
+        if session is not None and any(layer >= len(root_model.blocks) for layer in session.layers):
+            raise ValueError('A guidance layer is outside this model; choose valid guidance_layers before sampling')
+        if accelerated and guider.model_options.get('spectrum_h3_binding') is not None:
+            raise ValueError('Turn Spectrum off for Balanced/Speed acceleration, or select the Consistency preset')
         with ExitStack() as stack:
+            tracker = None
             acceleration = (stack.enter_context(install_acceleration(guider, self.acceleration, session))
                             if accelerated else None)
             if guided:
                 stack.enter_context(install_guidance(guider, session))
+            if self.memory_options.occlusion:
+                from .optional_occlusion import ensure_installed
+                from .occlusion_tracking import OcclusionTracker
+                with preserve_observation_rng():
+                    root = ensure_installed(progress=lambda message: notify_native(self.node_id, message, log=True))
+                    tracker = stack.enter_context(OcclusionTracker(root))
             try:
                 return self._sample(executor, noise, latent_image, sampler, sigmas,
                     denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes,
-                    guidance=session, acceleration=acceleration)
+                    guidance=session, acceleration=acceleration, tracker=tracker)
             finally:
                 if session is not None:
                     LOG.warning('Native Tiny VAE correction: %d observations, %d frame-pair proposals, '
@@ -213,7 +238,7 @@ class NativeVisualObserver:
 
     def _sample(self, executor, noise, latent_image, sampler, sigmas,
                 denoise_mask=None, callback=None, disable_pbar=False,
-                seed=None, latent_shapes=None, guidance=None, acceleration=None):
+                seed=None, latent_shapes=None, guidance=None, acceleration=None, tracker=None):
         import torch
         with preserve_observation_rng():
             decoder = _load_tae_decoder(self.tiny_vae_name)
@@ -234,8 +259,35 @@ class NativeVisualObserver:
                 pixel_count = sum(1 if i % 5 == 0 else 4 for i in range(shape[2]))
                 for frame in (guidance.config.source_frame, *frame_numbers(guidance.config.target_frames)):
                     decoded_to_latent(frame, pixel_count, shape[2])
+        from .native_guidance import decoded_to_latent, frame_numbers
+        from .region_memory import RegionMemory, RegionPlan, parse_regions
+        from .memory_inspector import MemoryInspector, write_report
+        from dataclasses import asdict
+        protected = frame_numbers(self.memory_options.protected_frames)
+        pixel_count = (sum(1 if i % 5 == 0 else 4 for i in range(latent_shapes[0][2]))
+                       if latent_shapes and len(latent_shapes[0]) == 5 else None)
+        if pixel_count is not None:
+            if any(frame >= pixel_count for frame in protected):
+                raise ValueError('A protected frame lies outside the generated video (indices start at zero)')
+            # A 2D Tiny VAE emits one frame per temporal latent; widget indices remain video frames.
+            mapped_protected = tuple(sorted(set(decoded_to_latent(f,pixel_count,latent_shapes[0][2])
+                if not getattr(decoder,'decodes_prefix',False) else f for f in protected)))
+        else:
+            mapped_protected = protected
         index = AdaptiveVisualIndex(capacity=self.max_memory_frames,
-                                    captures_per_step=self.max_frames)
+                                    captures_per_step=self.max_frames, protected_frames=mapped_protected)
+        region_memory = RegionMemory(parse_regions(self.memory_options.regions), mapped_protected)
+        inspector = MemoryInspector(enabled=self.memory_options.inspect)
+        settings = dict(observer=dict(max_frames=self.max_frames, max_memory_frames=self.max_memory_frames,
+            min_progress=self.min_progress, observation_interval=self.observation_interval,
+            tiny_vae_name=self.tiny_vae_name, observation=asdict(self.observation_settings)),
+            guidance=asdict(guidance.config) if guidance else None,
+            acceleration=asdict(self.acceleration) if self.acceleration else None,
+            memory=asdict(self.memory_options))
+        settings['sampling'] = dict(latent_shapes=latent_shapes,
+            sampler=getattr(getattr(sampler,'sampler_function',None),'__name__',type(sampler).__name__),
+            sigmas=sigmas.detach().cpu().tolist() if hasattr(sigmas,'detach') else None)
+        inspector_entry = None
         policy = ObservationPolicy(self.observation_settings, min_progress=self.min_progress,
                                    interval=self.observation_interval)
         storage = (VisualMemoryDisk(self.temp_root, max_bytes=int(self.disk_gib * 1024**3))
@@ -261,6 +313,8 @@ class NativeVisualObserver:
                     raise FileNotFoundError('Observation image storage is disabled; only descriptors are retained')
                 return store.read(record)
 
+            sampling_started = time.perf_counter()
+
             def report(state, *, log=False):
                 corrections = guidance.corrections if guidance is not None else 0
                 frame_pairs = guidance.matched_proposals if guidance is not None else 0
@@ -281,17 +335,21 @@ class NativeVisualObserver:
                     guidance_mode=mode, observations=observations, corrections=corrections,
                     frame_pair_proposals=frame_pairs,
                     corrected_rows=guidance.corrected_rows if guidance is not None else 0,
-                    observation_seconds=observation_seconds, peak_cache_bytes=peak_cache_bytes,
+                    observation_seconds=observation_seconds, sampling_seconds=time.perf_counter()-sampling_started,
+                    peak_cache_bytes=peak_cache_bytes,
                     skipped_observations=skipped_observations, preview_size=preview_size,
                     observation_reason=observation_reason, store_observation_images=store is not None,
                     acceleration=acceleration.metrics() if acceleration is not None else None,
-                    disabled_reason=disabled_reason)
+                    disabled_reason=disabled_reason,
+                    inspector=inspector_entry,
+                    guidance_details=guidance.diagnostics() if guidance is not None and self.memory_options.inspect else None,
+                    run_id=inspector.run_id, settings=settings, seed=seed)
 
             report('Sampling', log=True)
 
             def observing_callback(step, x0, x, total):
                 nonlocal budget_full, disabled_reason, observations, observation_seconds, peak_cache_bytes
-                nonlocal skipped_observations, preview_size, observation_reason
+                nonlocal skipped_observations, preview_size, observation_reason, inspector_entry
                 if guidance is not None:
                     guidance.progress = (step + 1) / max(1, total)
                 if acceleration is not None:
@@ -303,7 +361,7 @@ class NativeVisualObserver:
                 # No subsequent model evaluation can consume the final callback's plan.
                 if guidance is not None and total and (step + 1) / total >= guidance.config.end_progress:
                     eligible = False
-                    guidance.pairs = ()
+                    guidance.clear_plan()
                 if not budget_full and eligible:
                     started = time.perf_counter()
                     try:
@@ -319,8 +377,9 @@ class NativeVisualObserver:
                                     # Decoder outputs at different scales are not calibrated
                                     # to one descriptor distribution. Rebuild references.
                                     index.reset(on_evict=delete_record)
+                                    region_memory.clear()
                                     if guidance is not None:
-                                        guidance.pairs = ()
+                                        guidance.clear_plan()
                                 with preserve_observation_rng():
                                     preview_video = resize_observation(video[:1], decision.size)
                                     frames = decoder.decode_video(preview_video, frame_indices=None)
@@ -329,7 +388,6 @@ class NativeVisualObserver:
                                 descriptors = index.descriptors(frames)
                                 retrieval_options = {}
                                 if guidance is not None and guidance.config.mode == 'retrieved_frames':
-                                    from .native_guidance import decoded_to_latent
                                     retrieval_options = dict(forward_only=True, frame_groups=tuple(
                                         decoded_to_latent(frame, len(frames), guidance.latent_t)
                                         for frame in range(len(frames))))
@@ -339,6 +397,46 @@ class NativeVisualObserver:
                                 )
                                 if guidance is not None:
                                     guidance.observe(frames, references, step=step, total=total)
+                                    if region_memory.regions:
+                                        groups = tuple(decoded_to_latent(f,len(frames),guidance.latent_t)
+                                                       for f in range(len(frames)))
+                                        sources = ()
+                                        if guidance.config.mode == 'manual_frames':
+                                            source_latent = decoded_to_latent(guidance.config.source_frame,pixel_count,guidance.latent_t)
+                                            sources = tuple(f for f,g in enumerate(groups) if g == source_latent)[:1]
+                                        tracked = tracker.track(frames,region_memory.regions,
+                                            sources or mapped_protected or (0,)) if tracker else None
+                                        plans = region_memory.plan(frames, groups=groups,step=step,
+                                            source_frames=sources,tracked=tracked)
+                                        if guidance.config.mode == 'manual_frames':
+                                            targets = {decoded_to_latent(f,pixel_count,guidance.latent_t)
+                                                       for f in frame_numbers(guidance.config.target_frames)}
+                                            plans = tuple(p for p in plans if p.target in targets)
+                                        guidance.set_region_plans(plans)
+                                    else:
+                                        plans = tuple(RegionPlan(s,t,'whole frame',(0,0,1,1),(0,0,1,1),1.,
+                                            next(f for f in range(len(frames)) if decoded_to_latent(f,len(frames),guidance.latent_t)==s),
+                                            next(f for f in range(len(frames)) if decoded_to_latent(f,len(frames),guidance.latent_t)==t))
+                                            for s,t in guidance.pairs)
+                                    try:
+                                        groups = tuple(decoded_to_latent(f,len(frames),guidance.latent_t)
+                                                       for f in range(len(frames)))
+                                        starts = []
+                                        cursor = 0
+                                        for index_latent in range(guidance.latent_t):
+                                            starts.append(cursor)
+                                            cursor += 1 if index_latent % 5 == 0 else 4
+                                        video_frames = tuple(starts[g] if len(frames)==guidance.latent_t else f
+                                                             for f,g in enumerate(groups))
+                                        inspector_entry = inspector.observation(frames,plans,step=step,
+                                            events=region_memory.events,video_frames=video_frames,frame_groups=groups)
+                                    except Exception:
+                                        LOG.debug('Memory inspector image delivery failed; guidance preserved',exc_info=True)
+                                if guidance is None and self.memory_options.inspect:
+                                    try:
+                                        inspector_entry = inspector.observation(frames,(),step=step)
+                                    except Exception:
+                                        LOG.debug('Observation inspector unavailable',exc_info=True)
                                 if references and self.feedback_hook is not None:
                                     try:
                                         self.feedback_hook(step, tuple(references), read_record)
@@ -365,14 +463,20 @@ class NativeVisualObserver:
                         budget_full = True
                         disabled_reason = f'{type(exc).__name__}: {str(exc)[:160]}'
                         if guidance is not None:
-                            guidance.pairs = ()
+                            guidance.clear_plan()
                         LOG.warning("Native H3 observation disabled for this run after a memory limit: %s", exc)
                     except Exception as exc:
                         if acceleration is not None:
                             acceleration.prediction_unavailable()
                         if guidance is not None:
                             # Never retain stale frame matches after an observation error.
-                            guidance.pairs = ()
+                            guidance.clear_plan()
+                        observation_reason = f'{type(exc).__name__}: {str(exc)[:200]}'
+                        inspector_entry = dict(step=step,plans=[],events=[dict(region='observation',reason=observation_reason)])
+                        if tracker is not None:
+                            # A failed tracker must not silently turn into fixed-box guidance.
+                            budget_full = True
+                            disabled_reason = 'Optional tracking/observation failed: ' + observation_reason
                         LOG.warning("Native H3 visual observation skipped step %s: %s", step, exc)
                     finally:
                         observation_seconds += time.perf_counter() - started
@@ -380,10 +484,28 @@ class NativeVisualObserver:
                 if callback is not None:
                     callback(step, x0, x, total)
 
+            sampling_error = None
+            sampling_started = time.perf_counter()
             try:
                 result = executor(noise, latent_image, sampler, sigmas, denoise_mask,
                                   observing_callback, disable_pbar, seed, latent_shapes=latent_shapes)
+            except BaseException as exc:
+                sampling_error = f'{type(exc).__name__}: {str(exc)[:300]}'
+                raise
             finally:
+                if self.memory_options.export_report:
+                    try:
+                        import folder_paths
+                        path = write_report(Path(folder_paths.get_output_directory())/'minimax_memory_reports',
+                            settings=settings, seed=seed, inspector=inspector, error=sampling_error,
+                            metrics=dict(sampling_seconds=time.perf_counter()-sampling_started,
+                                observations=observations, observation_seconds=observation_seconds,
+                                guidance=guidance.diagnostics() if guidance else None,
+                                acceleration=acceleration.metrics() if acceleration else None))
+                        notify_native(self.node_id, f'Memory report saved: {path}', report_path=path)
+                    except Exception:
+                        LOG.warning('Unable to save optional memory report', exc_info=True)
+                region_memory.clear()
                 # The context manager also closes on BaseException/cancellation.
                 if store is not None:
                     store.close()
@@ -460,7 +582,7 @@ class MosaiChunkH3NativeVisualObserver:
             "store_observation_images": ("BOOLEAN", {"default": False,
                 "tooltip": "Disable to retain bounded RGB descriptors in RAM without encoding images or creating an image-cache directory. Retrieval decisions are unchanged; diagnostic image reads are unavailable."}),
             "generation_acceleration": (["off", "sol", "selective_cache", "sol_and_cache"], {
-                "default": "sol_and_cache", "tooltip": "Optional experimental generation acceleration, independent of Spectrum. Try sol first, then sol_and_cache. Memory layers remain real/dense. Approximate; compare picture, motion and audio. Turn other generation caches and Spectrum off."}),
+                "default": "off", "tooltip": "Optional experimental generation acceleration, independent of Spectrum. Try sol first, then sol_and_cache. Memory layers remain real/dense. Approximate; compare picture, motion and audio. Turn other generation caches and Spectrum off."}),
             "sol_tau": ("FLOAT", {"default": .5, "min": 0., "max": 2., "step": .05,
                 "tooltip": "Higher is sparser/faster with more approximation. Uses installed ComfyUI Sol kernels; unsupported calls retain existing dense/Sage attention."}),
             "acceleration_start": ("FLOAT", {"default": .35, "min": 0., "max": .95, "step": .05}),
@@ -480,6 +602,15 @@ class MosaiChunkH3NativeVisualObserver:
                 "tooltip": "Experimental prediction-drift heuristic: slightly more sparse after stable predictions, denser after large changes and near the end. Uses latent thumbnails; not an object/motion detector. Tau changes refresh residual caches."}),
             "sol_stable_boost": ("FLOAT", {"default": .15, "min": 0., "max": .3, "step": .05}),
             "sol_drift_threshold": ("FLOAT", {"default": .04, "min": .001, "max": 1., "step": .005}),
+            "memory_preset": (["Consistency", "Balanced", "Speed", "Custom"], {"default": "Consistency",
+                "tooltip": "Frontend preset updates visible settings. Saved explicit values are always honored; edit any preset control to select Custom."}),
+            "memory_regions": ("STRING", {"default": "[]", "multiline": True,
+                "tooltip": "Optional normalized boxes: [{\"name\":\"outfit\",\"box\":[0.2,0.1,0.8,1]}]. Draw regions in Memory inspector. Without tracking, boxes stay fixed in screen space."}),
+            "protected_frames": ("STRING", {"default": "", "tooltip": "Up to eight comma-separated final-video frame indices (zero-based). Pin clear full-outfit source frames; retained for this run only."}),
+            "confidence_guidance": ("BOOLEAN", {"default": False, "tooltip": "Optional experimental attenuation by feature-match confidence. Never exceeds guidance_strength; compare with fixed strength."}),
+            "memory_inspector": ("BOOLEAN", {"default": True, "tooltip": "Bounded in-memory preview cards, match reasons and correction map. No image files are retained."}),
+            "export_memory_report": ("BOOLEAN", {"default": False, "tooltip": "Save a JSON settings/metrics report to output/minimax_memory_reports. No prompt text or image content is saved."}),
+            "occlusion_aware_matching": ("BOOLEAN", {"default": False, "tooltip": "Opt-in: automatically installs isolated SAM 2 packages and a 156 MB tiny checkpoint on first use. CPU tracker; needs selected regions. Slower. Temporary tracker JPEGs are deleted."}),
         }, "hidden": {"unique_id": "UNIQUE_ID"}}
 
     def apply(self, model, tiny_vae_name, max_frames=8, min_progress=0.25,
@@ -490,13 +621,20 @@ class MosaiChunkH3NativeVisualObserver:
               observation_schedule='fixed', progressive_resolution=False,
               observation_start_scale=.5, observation_full_progress=.75,
               adaptive_change_threshold=.04, adaptive_max_interval=3,
-              store_observation_images=False, generation_acceleration='sol_and_cache', sol_tau=.5,
+              store_observation_images=False, generation_acceleration='off', sol_tau=.5,
               acceleration_start=.35, acceleration_end=.75, cache_threshold=.02,
               cache_max_reuse=1, cache_vram_gib=.5, cache_storage='ram', cache_ram_gib=2.,
-              cache_transfer_mib=16, adaptive_sol=False, sol_stable_boost=.15, sol_drift_threshold=.04):
+              cache_transfer_mib=16, adaptive_sol=False, sol_stable_boost=.15, sol_drift_threshold=.04,
+              memory_preset='Consistency', memory_regions='[]', protected_frames='',
+              confidence_guidance=False, memory_inspector=True, export_memory_report=False,
+              occlusion_aware_matching=False):
         from comfy.patcher_extension import WrappersMP
         from .native_guidance import GuidanceConfig
         from .generation_acceleration import AccelerationConfig
+        from .memory_controls import MemoryOptions
+        memory = MemoryOptions(regions=memory_regions,protected_frames=protected_frames,
+            inspect=bool(memory_inspector),export_report=bool(export_memory_report),
+            occlusion=bool(occlusion_aware_matching),preset=memory_preset).validate()
         acceleration = AccelerationConfig(mode=generation_acceleration, sol_tau=float(sol_tau),
             start=float(acceleration_start), end=float(acceleration_end),
             cache_threshold=float(cache_threshold), cache_max_reuse=int(cache_max_reuse),
@@ -506,7 +644,11 @@ class MosaiChunkH3NativeVisualObserver:
         guidance = GuidanceConfig(mode=guidance_mode, strength=float(guidance_strength),
             source_frame=int(guidance_source_frame), target_frames=guidance_target_frames,
             layers=guidance_layers, similarity=float(guidance_similarity),
-            max_anchor_tokens=int(max_anchor_tokens)).validate()
+            max_anchor_tokens=int(max_anchor_tokens), memory_regions=memory_regions,
+            protected_frames=protected_frames,confidence_guidance=bool(confidence_guidance),
+            inspect_memory=bool(memory_inspector)).validate()
+        if memory.occlusion and not guidance.enabled:
+            raise ValueError('Occlusion tracking needs active guidance; choose retrieved_frames or manual_frames and positive strength')
         if model.get_wrappers(WrappersMP.OUTER_SAMPLE, "mosaichunk_h3_controller"):
             raise ValueError("Native H3 Visual Observer cannot follow the RAVEN/MosaiChunk chunk controller")
         if model.get_wrappers(WrappersMP.OUTER_SAMPLE, KEY):
@@ -522,7 +664,7 @@ class MosaiChunkH3NativeVisualObserver:
                 progressive_resolution=bool(progressive_resolution),
                 start_scale=float(observation_start_scale), full_progress=float(observation_full_progress),
                 change_threshold=float(adaptive_change_threshold), max_interval=int(adaptive_max_interval)),
-            store_observation_images=store_observation_images, acceleration=acceleration
+            store_observation_images=store_observation_images, acceleration=acceleration, memory_options=memory
         ))
         if guidance.enabled:
             # Own the execution scope before Spectrum starts a runtime, regardless
