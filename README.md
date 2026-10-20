@@ -91,14 +91,16 @@ Current scope: text-to-video-and-audio plus experimental first/last-frame and re
 **Optional generation acceleration:** the same node now has
 `generation_acceleration=sol`, `selective_cache`, or `sol_and_cache`.
 Start with **Sol**, then compare the combined mode. Memory layers remain real
-and dense; caching never skips them. Existing workflows default to `off`.
+and dense; caching never skips them. New nodes use the conservative combined
+preset below; explicit settings in existing workflows are preserved.
 No new model download or Turbo LoRA is required. These are experimental
 approximations with no measured full-model speedup in this repository yet.
 See [GENERATION_ACCELERATION.md](GENERATION_ACCELERATION.md) for settings,
 compatibility, memory limits and the comparison procedure.
 VRAM-constrained setups can now choose bounded `cache_storage=ram` (or `auto`)
 with small GPU transfers. Optional `adaptive_sol` varies sparsity using prediction
-drift and final-detail protection. Both preserve the previous defaults; see the
+drift and final-detail protection. RAM storage is the new-node default, while
+`adaptive_sol=false`; see the
 same guide for the staged test procedure and limitations.
 
 For **normal full-video MiniMax H3 sampling**, the separately registered
@@ -140,7 +142,10 @@ The consistency-first starting preset uses `max_frames=8`, `max_memory_frames=64
 `guidance_layers=8,16,24`, `guidance_similarity=0.85`, `max_anchor_tokens=256`,
 `observation_interval=1`, `max_observation_megapixels=64` and `disk_gib=2`.
 Observations use `observation_schedule=fixed` and `progressive_resolution=false`,
-with `generation_acceleration=off`. These exploratory defaults favor observation
+with conservative `sol_and_cache` acceleration: `sol_tau=0.50`,
+`acceleration_start=0.35`, `acceleration_end=0.75`, `cache_threshold=0.02`,
+`cache_max_reuse=1`, `cache_storage=ram`, `cache_ram_gib=2`,
+`cache_transfer_mib=16` and `adaptive_sol=false`. These defaults favor observation
 coverage over speed; they are not a measured optimal preset or an outfit guarantee.
 Earlier observation gives cross-step retrieval more opportunities to find stable
 references; it also performs more decoding than the old 50% start. Manual source

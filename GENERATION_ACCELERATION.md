@@ -1,13 +1,15 @@
 # Optional native H3 generation acceleration
 
-The **MosaiChunk H3 Native Visual Observer (experimental)** keeps its MODEL
+The **MiniMax H3 Memory — Native Visual Observer (experimental)** keeps its MODEL
 input/output and existing sampler connection. Its optional accelerator is
 independent of Spectrum, with no additional model weights, Turbo LoRA or disk
 cache. Observation defaults and memory-guidance settings are unchanged.
 
 These methods approximate model computations and can change detail, motion,
 reference adherence and audio. Full trained-model GPU speed and quality remain
-to be validated. Off is the default, including for older saved workflows.
+to be validated. New nodes default to conservative combined acceleration;
+explicit settings in saved workflows are preserved. Select `off` for a baseline.
+This is an exploratory preset, not a guarantee of unchanged appearance memory.
 
 ## Test in this order
 
@@ -25,13 +27,17 @@ to be validated. Off is the default, including for older saved workflows.
 
 | Control | Starting value | Meaning |
 | --- | --- | --- |
-| `generation_acceleration` | `off` | Select Sol first, then the combined mode |
-| `sol_tau` | `1.0` | Higher is sparser with greater approximation |
-| `acceleration_start` | `0.25` | Fraction of the noise schedule before acceleration starts |
-| `acceleration_end` | `0.85` | Return to full computation near the end |
-| `cache_threshold` | `0.05` | Lower tolerates less sampled residual drift |
+| `generation_acceleration` | `sol_and_cache` | Combined acceleration; compare with off and Sol alone |
+| `sol_tau` | `0.50` | Higher is sparser with greater approximation |
+| `acceleration_start` | `0.35` | Fraction of the noise schedule before acceleration starts |
+| `acceleration_end` | `0.75` | Return to full computation near the end |
+| `cache_threshold` | `0.02` | Lower tolerates less sampled residual drift |
 | `cache_max_reuse` | `1` | At most one consecutive reuse before refreshing |
 | `cache_vram_gib` | `0.5` | Maximum retained GPU cache tensors, additional to model memory |
+| `cache_storage` | `ram` | Keep residuals in system RAM with small GPU transfers |
+| `cache_ram_gib` | `2` | Retained RAM cache budget |
+| `cache_transfer_mib` | `16` | Maximum staging chunk for RAM transfers |
+| `adaptive_sol` | `false` | Keep Sol sparsity fixed |
 
 The window uses the model's percent-to-sigma mapping; it is not a fraction of
 elapsed wall time. Start must be less than end. Cache/guidance currently require
@@ -116,9 +122,9 @@ after updating, restart ComfyUI and refresh the browser's node definitions.
 
 ## RAM-backed storage and adaptive Sol
 
-Existing defaults remain `cache_storage=gpu` and `adaptive_sol=false`, preserving
-the previously working Sol behavior. On VRAM-constrained systems, test these
-additional controls in order:
+New-node defaults are `cache_storage=ram` and `adaptive_sol=false`; saved
+explicit choices are preserved. On VRAM-constrained systems, test these
+controls in order:
 
 1. Select `sol_and_cache`, set `cache_storage=ram`, and keep `cache_ram_gib=2`
    and `cache_transfer_mib=16`. Keep your cache threshold and reuse cap unchanged.
