@@ -74,9 +74,12 @@ def write_report(directory, *, settings, seed, metrics, inspector=None, error=No
         report['comfyui'] = 'unknown'
     source = Path(__file__).resolve().parent
     import hashlib
+    modules = ('native_guidance.py','region_memory.py','generation_acceleration.py',
+               'native_visual_observer.py','repair_pass.py','check_skipping.py',
+               'observation_policy.py','shared_tiny_vae.py')
+    report['implementation_modules'] = list(modules)
     report['implementation_sha256'] = hashlib.sha256(b''.join(
-        (source/name).read_bytes() for name in ('native_guidance.py','region_memory.py',
-                                              'generation_acceleration.py'))).hexdigest()
+        name.encode()+b'\0'+(source/name).read_bytes() for name in modules)).hexdigest()
     name = f'minimax-memory-{report["run_id"]}.json'
     pending = directory / (name+'.partial')
     pending.write_text(json.dumps(report, indent=2, default=str), encoding='utf-8')

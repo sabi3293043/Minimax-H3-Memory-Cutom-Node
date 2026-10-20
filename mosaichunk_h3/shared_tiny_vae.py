@@ -39,6 +39,7 @@ class SharedTinyVAE:
         self.frames = OrderedDict()
         self.bytes = self.peak_bytes = 0
         self.active = False
+        self.retain_last_callback = False
         self.classes = set()
         self.preview_classes = set()
         self.suppress_default_preview = False
@@ -118,6 +119,22 @@ class SharedTinyVAE:
             yield
         finally:
             self.active = False
+            if not self.retain_last_callback:
+                self.clear()
+
+    @contextmanager
+    def completed_step(self):
+        """Consume the bounded final callback cache during optional post-inspection.
+
+        Exact input/weight keys still apply; a different completed latent must
+        decode normally. No old-step input or GPU tensors are retained.
+        """
+        previous = self.active
+        self.active = True
+        try:
+            yield
+        finally:
+            self.active = previous
             self.clear()
 
     def clear(self):

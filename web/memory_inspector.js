@@ -13,7 +13,8 @@ const advanced = new Set(['memory_regions', 'sol_tau', 'acceleration_start', 'ac
   'adaptive_change_threshold', 'adaptive_max_interval', 'observation_start_scale',
   'observation_full_progress', 'max_observation_megapixels', 'disk_gib', 'occlusion_cpu_threads',
   'share_tiny_vae_frames','memory_preview_frames','memory_preview_resolution','memory_preview_fps',
-  'occlusion_frame_selection','occlusion_frame_budget'])
+  'occlusion_frame_selection','occlusion_frame_budget','second_pass_max_steps',
+  'second_pass_strength','second_pass_threshold','second_pass_max_area'])
 
 function widget(node, name) { return node.widgets?.find(w => w.name === name) }
 function state(node) {
@@ -101,6 +102,7 @@ export function openInspector(node) {
     download({ schema: 1, run_id: detail.run_id, seed: detail.seed,
       settings: detail.settings ?? {}, metrics: { sampling_seconds: detail.sampling_seconds, observations: detail.observations,
         tracking: detail.tracking,
+        second_pass: detail.second_pass, shared_decode: detail.shared_decode,
         observation_seconds: detail.observation_seconds, corrections: detail.corrections,
         guidance: detail.guidance_details, acceleration: detail.acceleration },
       node_values: Object.fromEntries((node.widgets ?? []).filter(w => !w.options || w.options.serialize !== false)
@@ -170,6 +172,10 @@ function render(node) {
   data.summary.textContent = [detail.message ?? 'Waiting for observations',
     `Correction calls: whole frame ${detail.guidance_details?.global_corrections ?? 0}, regional ${detail.guidance_details?.regional_corrections ?? 0}`,
     `Protected video frames: ${widget(node,'protected_frames')?.value || 'none'}`,
+    ...(detail.second_pass ? [
+      `Repair: ${detail.second_pass.mode}, ${detail.second_pass.steps} additional steps, ${detail.second_pass.candidates ?? 0} candidates; accepted: ${detail.second_pass.accepted}`,
+      `Reference metric (heuristic): ${detail.second_pass.score_before ?? 'pending'} → ${detail.second_pass.score_after ?? 'pending'}`
+    ] : []),
     ...decisions.map(d => `${d.region}: source ${d.source}, target ${d.target}: ${d.corrected}/${d.tested ?? '?'} cells corrected (${d.reason})`),
     ...(data.history.at(-1)?.events ?? []).map(e=>`${e.region}: ${e.reason}`),
     'Cards show proposed sources/targets. Correction maps accumulate cells from actual model evaluations.'
@@ -247,6 +253,12 @@ app.registerExtension({
         if (control.name === 'occlusion_cpu_threads') control.label = 'Tracking CPU threads (0 = all)'
         if (control.name === 'occlusion_frame_selection') control.label = 'Tracking frame selection'
         if (control.name === 'occlusion_frame_budget') control.label = 'Tracking starting frame budget'
+        if (control.name === 'skip_consistency_checks') control.label = 'Skip consistency checks'
+        if (control.name === 'checks_to_skip') control.label = 'Checks to skip (auto: maximum)'
+        if (control.name === 'auto_check_skipping') control.label = 'Auto check skipping (heuristic)'
+        if (control.name === 'second_pass') control.label = 'Second-pass repair (experimental)'
+        if (control.name === 'second_pass_steps') control.label = 'Manual repair steps'
+        if (control.name === 'auto_second_pass_steps') control.label = 'Auto repair steps (estimate)'
         const previous = control.callback
         control.callback = (...values) => {
           previous?.apply(control,values)

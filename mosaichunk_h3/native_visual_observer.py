@@ -150,7 +150,8 @@ class NativeVisualObserver:
                  max_memory_frames=24, temp_root=None, feedback_hook=None,
                  guidance=None, max_observation_megapixels=64.,
                  observation_interval=1, node_id=None, observation_settings=None,
-                 store_observation_images=True, acceleration=None, memory_options=None):
+                 store_observation_images=True, acceleration=None, memory_options=None,
+                 check_skipping=None, second_pass=None):
         if not 1 <= int(max_frames) <= 64:
             raise ValueError("max_frames must be between 1 and 64")
         if not 1 <= int(max_memory_frames) <= 256:
@@ -180,6 +181,14 @@ class NativeVisualObserver:
         self.acceleration = acceleration
         from .memory_controls import MemoryOptions
         self.memory_options = (memory_options or MemoryOptions()).validate()
+        from .check_skipping import CheckSkipping
+        from .repair_pass import SecondPassSettings
+        self.check_skipping = (check_skipping or CheckSkipping()).validate()
+        self.second_pass = (second_pass or SecondPassSettings()).validate()
+        self.observation_settings, self.observation_interval = self.check_skipping.resolve(
+            self.observation_settings,self.observation_interval)
+        self.observation_settings.validate(min_progress=self.min_progress,interval=self.observation_interval)
+        self.defer_observation = False
 
     def __call__(self, executor, noise, latent_image, sampler, sigmas,
                  denoise_mask=None, callback=None, disable_pbar=False,
@@ -190,9 +199,14 @@ class NativeVisualObserver:
                 if self.memory_options.share_frames:
                     from .shared_tiny_vae import SharedTinyVAE,install_shared_callback
                     shared = stack.enter_context(SharedTinyVAE(max_bytes=int(self.max_observation_megapixels*1e6*6)))
+                    shared.retain_last_callback = self.second_pass.enabled
                     guider = getattr(executor,'class_obj',None)
                     if guider is not None and hasattr(guider,'model_options'):
                         stack.enter_context(install_shared_callback(guider,shared))
+                if self.second_pass.enabled:
+                    from .repair_pass import execute_second_pass
+                    return execute_second_pass(self, executor, noise, latent_image, sampler, sigmas,
+                        denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes,shared=shared)
                 return self._call(executor, noise, latent_image, sampler, sigmas,
                     denoise_mask, callback, disable_pbar, seed, latent_shapes=latent_shapes,shared=shared)
         except BaseException as exc:
@@ -306,6 +320,8 @@ class NativeVisualObserver:
             guidance=asdict(guidance.config) if guidance else None,
             acceleration=asdict(self.acceleration) if self.acceleration else None,
             memory=asdict(self.memory_options))
+        settings['check_skipping'] = asdict(self.check_skipping)
+        settings['second_pass'] = asdict(self.second_pass)
         settings['sampling'] = dict(latent_shapes=latent_shapes,
             sampler=getattr(getattr(sampler,'sampler_function',None),'__name__',type(sampler).__name__),
             sigmas=sigmas.detach().cpu().tolist() if hasattr(sigmas,'detach') else None)
@@ -350,6 +366,8 @@ class NativeVisualObserver:
             mode = guidance.config.mode if guidance is not None else 'observe_only'
             label = ('Observation only (guidance inactive)' if guidance is None else
                      f'Guidance enabled: {mode}')
+            if self.defer_observation:
+                label = 'First pass; consistency checks deferred to completed video'
 
             def delete_record(record):
                 if store is not None:
@@ -427,7 +445,7 @@ class NativeVisualObserver:
                 # Observational failures must not change H3's sampling process
                 # or stop native progress and third-party preview callbacks.
                 first_step = max(0, math.ceil(self.min_progress * total) - 1)
-                eligible = total > 0 and step >= first_step
+                eligible = total > 0 and step >= first_step and not self.defer_observation
                 # No subsequent model evaluation can consume the final callback's plan.
                 if guidance is not None and total and (step + 1) / total >= guidance.config.end_progress:
                     eligible = False
@@ -741,6 +759,26 @@ class MosaiChunkH3NativeVisualObserver:
                 "tooltip": "Retrieved: track current decoded frames selected around memory source/target matches, with intermediate/discovery frames. Uncertain visibility/confidence widens the NEXT fresh observation to at most 16, without repeating segmentation or reusing old masks. No matches: spread coverage. Uniform: fixed spread coverage. No extra VAE decode; sparse tracking can miss brief occlusions."}),
             "occlusion_frame_budget": ("INT", {"default": 8,"min": 4,"max": 16,"step": 1,
                 "tooltip": "Starting number of shared observation frames for optional CPU tracking. Protected sources are always included and may raise this budget. Retrieved mode can widen the next observation to 16 after uncertainty. One tracking pass per observation. Whole-frame memory observations are unchanged. Uniform + 16 provides broad fixed tracking coverage."}),
+            "skip_consistency_checks": ("BOOLEAN", {"default": False,
+                "tooltip": "Skip only expensive memory/tracking checks; every denoiser evaluation still runs. Overrides observation_schedule/interval while enabled. Second-pass mode already defers first-pass checks."}),
+            "checks_to_skip": ("INT", {"default": 1,"min": 1,"max": 8,
+                "tooltip": "Manual: skip this many checks between observations (1 = check every two steps). Auto: maximum consecutive checks that may be skipped; prediction changes or warmup can trigger earlier checks."}),
+            "auto_check_skipping": ("BOOLEAN", {"default": False,
+                "tooltip": "With check skipping enabled, inspect a cheap 8x8 latent fingerprint for EVERY temporal latent each step. After three warmup observations, skip expensive checks only while local prediction change stays below adaptive_change_threshold, bounded by checks_to_skip. Heuristic; cannot prove that clothing/visibility is unchanged."}),
+            "second_pass": ("BOOLEAN", {"default": False,
+                "tooltip": "Experimental: generate first with memory checks deferred, inspect the finished prediction once, then optionally perform masked appearance repair. Preserves original latents outside repair areas and all audio. Model still processes full context. Requires active guidance, CFG=1, a complete sigma schedule and recent native H3 mask support."}),
+            "second_pass_steps": ("INT", {"default": 6,"min": 2,"max": 32,
+                "tooltip": "Manual number of additional repair schedule steps. Does not alter the main sampler's step count. Some solvers evaluate the denoiser more than once per step. Auto mode estimates a budget instead; no candidates means no repair steps."}),
+            "auto_second_pass_steps": ("BOOLEAN", {"default": False,
+                "tooltip": "Estimate a bounded repair budget from affected latent area and measured appearance drift. Not a calibrated count of steps required to fix errors. Keeps a candidate only if its reference metric improves without substantial structural loss; this does not certify identity or visual quality."}),
+            "second_pass_max_steps": ("INT", {"default": 12,"min": 2,"max": 32,
+                "tooltip": "Hard cap for the automatic repair step estimate; manual mode uses second_pass_steps."}),
+            "second_pass_strength": ("FLOAT", {"default": .25,"min": .05,"max": .60,"step": .01,
+                "tooltip": "Maximum noise level relative to the first pass's starting sigma for localized repair. More noise permits larger changes and greater risk. Your existing VAE and checkpoint are retained."}),
+            "second_pass_threshold": ("FLOAT", {"default": .10,"min": .02,"max": .30,"step": .01,
+                "tooltip": "RGB drift threshold for structurally aligned repair candidates. Heuristic, not semantic inconsistency detection. Camera/pose changes and ambiguous matches are withheld."}),
+            "second_pass_max_area": ("FLOAT", {"default": .20,"min": .01,"max": .50,"step": .01,
+                "tooltip": "Maximum fraction of video latents eligible for repair. Source/reference frames remain protected. This limits changes, not transformer computation."}),
         }, "hidden": {"unique_id": "UNIQUE_ID"}}
 
     def apply(self, model, tiny_vae_name, max_frames=8, min_progress=0.25,
@@ -759,11 +797,20 @@ class MosaiChunkH3NativeVisualObserver:
               confidence_guidance=False, memory_inspector=True, export_memory_report=False,
               occlusion_aware_matching=False, occlusion_cpu_threads=0,share_tiny_vae_frames=True,
               memory_preview='auto',memory_preview_frames=16,memory_preview_resolution=512,memory_preview_fps=8.,
-              occlusion_frame_selection='retrieved',occlusion_frame_budget=8):
+              occlusion_frame_selection='retrieved',occlusion_frame_budget=8,
+              skip_consistency_checks=False,checks_to_skip=1,auto_check_skipping=False,
+              second_pass=False,second_pass_steps=6,auto_second_pass_steps=False,
+              second_pass_max_steps=12,second_pass_strength=.25,second_pass_threshold=.10,
+              second_pass_max_area=.20):
         from comfy.patcher_extension import WrappersMP
         from .native_guidance import GuidanceConfig
         from .generation_acceleration import AccelerationConfig
         from .memory_controls import MemoryOptions
+        from .check_skipping import CheckSkipping
+        from .repair_pass import SecondPassSettings
+        skipping = CheckSkipping(bool(skip_consistency_checks),bool(auto_check_skipping),checks_to_skip).validate()
+        repair = SecondPassSettings(bool(second_pass),bool(auto_second_pass_steps),second_pass_steps,
+            second_pass_max_steps,float(second_pass_strength),float(second_pass_threshold),float(second_pass_max_area)).validate()
         memory = MemoryOptions(regions=memory_regions,protected_frames=protected_frames,
             inspect=bool(memory_inspector),export_report=bool(export_memory_report),
             occlusion=bool(occlusion_aware_matching),preset=memory_preset,
@@ -785,6 +832,8 @@ class MosaiChunkH3NativeVisualObserver:
             inspect_memory=bool(memory_inspector)).validate()
         if memory.occlusion and not guidance.enabled:
             raise ValueError('Occlusion tracking needs active guidance; choose retrieved_frames or manual_frames and positive strength')
+        if repair.enabled and not guidance.enabled:
+            raise ValueError('Second pass requires retrieved_frames or manual_frames with positive guidance strength')
         if model.get_wrappers(WrappersMP.OUTER_SAMPLE, "mosaichunk_h3_controller"):
             raise ValueError("Native H3 Visual Observer cannot follow the RAVEN/MosaiChunk chunk controller")
         if model.get_wrappers(WrappersMP.OUTER_SAMPLE, KEY):
@@ -800,7 +849,8 @@ class MosaiChunkH3NativeVisualObserver:
                 progressive_resolution=bool(progressive_resolution),
                 start_scale=float(observation_start_scale), full_progress=float(observation_full_progress),
                 change_threshold=float(adaptive_change_threshold), max_interval=int(adaptive_max_interval)),
-            store_observation_images=store_observation_images, acceleration=acceleration, memory_options=memory
+            store_observation_images=store_observation_images, acceleration=acceleration, memory_options=memory,
+            check_skipping=skipping,second_pass=repair
         ))
         if guidance.enabled:
             # Own the execution scope before Spectrum starts a runtime, regardless

@@ -1,5 +1,34 @@
 # Validation status
 
+## Optional masked repair and check scheduling (2026-10-20)
+
+- 599 selected CPU/unit tests pass. New coverage includes manual/automatic check
+  scheduling, late-frame/local latent changes, unchanged denoiser callbacks,
+  protected sources, persistent multi-frame drift, multiple regions, coverage
+  limits, structural rejection, native sigma tails and bounded step estimates.
+- Actual tiny native H3 CPU sampling exercises the existing CFGGuider and Euler
+  sampler: six first-pass steps make six denoiser evaluations; four manual repair
+  steps bring the total to ten, and a five-step automatic budget brings it to
+  eleven. Skipping memory checks still makes all six first-pass evaluations.
+  An empty proposal performs no repair evaluations. These counts are for Euler,
+  not a promise that every solver has one model call per schedule step.
+- Native text, first/last-frame and reference paths pass. Tests check bit-exact
+  preservation of unselected video latents and all audio, original-result
+  restoration on rejection, synchronization of the denoised output, callback
+  failure propagation, cancellation and model/wrapper cleanup. Real KJ Preview
+  Override works in both wrapper orders without duplicated wrapper preparation.
+- The native execution probe deliberately forces repair proposals and acceptance
+  to exercise the control path. Separate synthetic RGB tests exercise real
+  proposal selection. Neither validates semantic detection, trained-video
+  improvement, automatic budget calibration or an end-to-end speedup.
+- Compatible final callback RGB can be reused for completed-video inspection;
+  changed inputs require a fresh decode. Temporary frames and hooks are cleared
+  on completion or cancellation. Existing Tiny VAE/checkpoints are unchanged.
+- Real ComfyUI frontend checks cover old-workflow defaults, optional controls,
+  retained-result captions, repair inspector metrics, playback and serialization,
+  with no new browser errors after isolated fixture startup. Both new features
+  remain off by default. No full-checkpoint generation was queued for this revision.
+
 ## Retrieval-guided tracking from shared observations (2026-10-20)
 
 - 573 selected CPU/unit tests pass. Coverage includes source/target selection,

@@ -51,7 +51,7 @@ function attach(node) {
     canvas.getContext('2d').drawImage(image, 0, 0)
     scrub.value = String(state.index)
     info.textContent = `${state.index + 1}/${state.images.length}`
-    caption.textContent = `Step ${state.detail.step}/${state.detail.total} · ${state.detail.width}×${state.detail.height} · silent observation preview`
+    caption.textContent = state.detail.caption ?? `Step ${state.detail.step}/${state.detail.total} · ${state.detail.width}×${state.detail.height} · silent observation preview`
   }
   play.onclick = () => { state.paused = !state.paused; play.textContent = state.paused ? 'Play' : 'Pause' }
   scrub.oninput = () => { state.index = Number(scrub.value); state.paused = true; play.textContent = 'Play'; draw() }

@@ -76,6 +76,16 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn('guidance inactive', events[-1]['message'])
         self.assertIn('cache removed', events[-1]['message'])
         self.assertGreater(events[-1]['peak_cache_bytes'], 0)
+
+    def test_manual_and_auto_check_skipping_keep_every_sampler_callback(self):
+        from mosaichunk_h3.check_skipping import CheckSkipping
+        for auto in (False,True):
+            decoder=self.decoder()
+            events,forwarded=self.run_observer(decoder,callbacks=12,observer_options={
+                'check_skipping':CheckSkipping(True,auto,2)})
+            self.assertEqual(forwarded,list(range(12)))
+            self.assertLess(decoder.decode_video.call_count,12)
+            self.assertGreater(events[-1]['skipped_observations'],0)
         self.assertGreater(events[-1]['observation_seconds'], 0)
 
     def test_cuda_oom_disables_observation_and_clears_stale_guidance(self):

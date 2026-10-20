@@ -24,6 +24,14 @@ See [MEMORY_CONTROLS.md](MEMORY_CONTROLS.md) for controls, setup and limitations
 The implementation uses experimental visual/feature matching; trained-video
 identity and outfit preservation are not guaranteed.
 
+Optional **Skip consistency checks** reduces memory/tracking checks while every
+normal denoising step still runs. Optional **Second-pass repair** defers those
+checks until generation finishes, then proposes a bounded masked repair using
+your existing sampler and Tiny VAE. Both start off. Automatic skipping and
+repair-step estimates are heuristics; they do not certify visual errors or the
+number of steps needed to fix them. See the
+[testing instructions and limitations](MEMORY_CONTROLS.md#optional-check-skipping-and-second-pass-repair).
+
 ## Legacy RAVEN chunk backend
 
 **Experimental local ComfyUI port of MosaiChunk's T2V memory router. Full-size video generation and quality are not yet validated by this repository.**

@@ -35,6 +35,30 @@ class FakeDecoder:
 class SharedTinyTests(unittest.TestCase):
     def video(self):return torch.arange(1*24*4*4*6).reshape(1,24,4,4,6).float()/2304
 
+    def test_second_pass_can_consume_exact_final_preview_without_another_decode(self):
+        decoder=FakeDecoder();video=self.video()
+        with SharedTinyVAE() as shared:
+            shared.register(FakeDecoder);shared.retain_last_callback=True
+            with shared.step():decoder.decode_video(video)
+            self.assertGreater(shared.bytes,0)
+            with shared.completed_step():decoder.decode_video(video.clone())
+            self.assertEqual(decoder.calls,[0,1,2,3])
+            self.assertEqual(shared.bytes,0)
+        self.assertEqual(shared.bytes,0)
+
+    def test_post_inspection_rejects_different_completed_latents_and_cleans_cancellation(self):
+        decoder=FakeDecoder();video=self.video()
+        shared=SharedTinyVAE()
+        with self.assertRaisesRegex(RuntimeError,'cancel'):
+            with shared:
+                shared.register(FakeDecoder);shared.retain_last_callback=True
+                with shared.step():decoder.decode_video(video)
+                with shared.completed_step():
+                    decoder.decode_video(video+.01)
+                    raise RuntimeError('cancel')
+        self.assertEqual(len(decoder.calls),8)
+        self.assertEqual(shared.bytes,0)
+
     def test_fingerprint_handles_fp16_channels_last_singleton_weights(self):
         value=torch.ones(3,96,1,1,dtype=torch.float16).to(memory_format=torch.channels_last)
         self.assertEqual(tensor_digest(value),tensor_digest(value.clone(memory_format=torch.contiguous_format)))

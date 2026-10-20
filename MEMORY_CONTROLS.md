@@ -211,6 +211,80 @@ sampler's ordinary image preview to avoid another Tiny VAE pass for the same
 display. Progress/x0 callbacks still run. Unrelated threads and previews outside
 the callback scope retain their original behavior; the hooks are restored.
 
+## Optional check skipping and second-pass repair
+
+Both features are off by default, including when an older workflow is loaded.
+They use the same MODEL node, checkpoint, Tiny VAE and existing sampler nodes.
+They do not download another model. Optional SAM 2 tracking keeps its existing
+explicit opt-in dependency installation.
+
+**Check skipping:** turn on `skip_consistency_checks`, leave
+`auto_check_skipping=false`, and set `checks_to_skip=1` to inspect every second
+eligible step. A value of 2 inspects every third step. Every normal denoiser
+evaluation and sampler callback still runs. Existing guidance plans remain in
+use between checks; skipping can miss changes and is not a quality guarantee.
+
+With `auto_check_skipping=true`, the count becomes the maximum skipped checks.
+An inexpensive latent probe covers every temporal latent and an 8x8 spatial
+grid. Warmup observations, detected change, resolution transitions and the
+maximum gap force another check. This is a change heuristic, not a detector of
+occlusion or semantic mistakes. It never skips the model's denoising work.
+
+**Second-pass repair:** turn on `second_pass`, keep active `retrieved_frames`
+or `manual_frames` guidance and CFG 1, and start with `second_pass_steps=6`,
+`auto_second_pass_steps=false`. The first pass runs the normal sampler without
+memory/tracking observations or memory corrections. Preview can still run.
+The completed video is decoded with your selected Tiny VAE and inspected once;
+optional tracking uses one bounded, uniform 16-frame pass from those same RGB
+frames. Check-skipping controls do not change this deferred first-pass behavior.
+
+The planner compares appearance in strongly aligned views. It proposes changes
+only where its coarse RGB descriptors drift while structural agreement stays
+high. It is not a semantic identity detector: pose/camera changes, similar
+objects and low-detail frames can cause misses or false proposals. Regions and
+trusted tracking restrict proposals; without boxes it uses conservative
+whole-view comparisons and rejects broad exposure changes. Source frames,
+protected frames and native keyframe guide spans cannot become repair targets.
+Persistent changes include all qualifying target groups, rather than isolated
+frame samples. If combined coverage exceeds `second_pass_max_area` (default
+20% of video latents), or more than 128 region/frame candidates are needed,
+the entire proposal is withheld to avoid a partial repair of a persistent change.
+
+Repair restarts a low-noise tail of your sigma schedule with the same sampler.
+`second_pass_strength=.25` sets the starting sigma to 25% of the first-pass
+starting sigma; it is not a universal percentage of visual change. Manual steps
+specify the repair schedule length; solvers can evaluate the denoiser more than
+once per step. `auto_second_pass_steps` estimates a budget from coverage and
+measured drift, bounded by `second_pass_max_steps` (12). This estimate is
+uncalibrated, with no convergence guarantee or automatic early stop. It cannot
+know how many steps are needed to correct clothing or identity.
+
+Native video masks restrict changes to selected latents. Unselected video
+latents and all audio latents are restored bit for bit. Decoded pixel boundaries
+can still vary because the final VAE has a receptive field. The model continues
+to process full context, so a small mask does not imply a proportional speedup.
+Final inspection and extra denoising can make this slower; any savings come
+from deferred memory/tracking checks, not from skipping model work.
+
+A candidate is accepted only if its reference appearance metric improves while
+structural agreement stays within tolerance. This is not proof of visual
+quality. Otherwise the original result is retained; repair errors also retain
+the original, while cancellation still cancels. No confident candidates means
+zero extra sampler steps. Both normal and denoised sampler outputs agree with
+the retained result. The inspector/report shows the proposal count, repair
+budget, heuristic scores and acceptance. Correction counts/maps describe the
+attempted repair, including when rejected. The node's final player identifies
+the retained result; an external preview may have shown a rejected candidate
+during repair.
+
+This requires native H3 video/audio denoise-mask support in ComfyUI and a complete
+descending sigma schedule ending at zero. Caller-supplied denoise masks remain
+unsupported for memory guidance; the repair pass owns its masks internally.
+Test manual skipping and manual second-pass repair separately against the same
+seed with both features off before trying their automatic controls. Inspect the
+video and soundtrack as well as timings. No trained-checkpoint end-to-end
+speedup or quality improvement has been established for these features.
+
 ## Compatibility and reports
 
 Preflight checks reject unsupported CFG, denoise masks, model geometry,

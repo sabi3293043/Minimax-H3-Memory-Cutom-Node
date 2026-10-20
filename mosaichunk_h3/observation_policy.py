@@ -11,6 +11,7 @@ class ObservationSettings:
     full_progress: float = .75
     change_threshold: float = .04
     max_interval: int = 3
+    detailed_checks: bool = False
 
     def validate(self, *, min_progress, interval):
         if self.schedule not in ('fixed', 'adaptive'):
@@ -74,6 +75,25 @@ def resize_observation(video, size):
     return torch.stack(frames, dim=2)
 
 
+def detailed_latent_fingerprint(video):
+    """All temporal latents, 8x8 spatial cells; no VAE or model evaluation.
+
+    This bounds transfers per frame and avoids averaging a small changing area
+    into a whole-frame thumbnail. It remains an uncalibrated change heuristic.
+    """
+    import torch
+    import torch.nn.functional as F
+    with torch.no_grad():
+        parts = []
+        for clip in video.detach().split(4, dim=2):
+            flat = clip.movedim(2,1).reshape(-1,video.shape[1],*video.shape[-2:])
+            parts.append(F.adaptive_avg_pool2d(flat.float(),(8,8)).cpu())
+        result = torch.cat(parts)
+        if not torch.isfinite(result).all():
+            raise ValueError('Nonfinite detailed observation fingerprint')
+        return result
+
+
 def decode_observation_views(decoder, video, *, size, reference_sizes=()):
     """Current-detail preview plus same-scale queries for retained history.
 
@@ -125,7 +145,7 @@ class ObservationPolicy:
         changed_size = size != self.last_size
         if not changed_size and gap is not None and gap < self.interval:
             return ObservationDecision(False, size, 'minimum interval')
-        fingerprint = latent_fingerprint(video)
+        fingerprint = detailed_latent_fingerprint(video) if self.settings.detailed_checks else latent_fingerprint(video)
         change = None
         if self.last_fingerprint is not None and self.last_fingerprint.shape == fingerprint.shape:
             delta = (fingerprint - self.last_fingerprint).square().mean(dim=1).sqrt()
